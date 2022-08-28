@@ -8,5 +8,4 @@
   (lib (name "qwelyt")(type "KiCad")(uri "${KIPRJMOD}/libs/qwelyt/qwelyt.pretty")(options "")(descr ""))
   (lib (name "kbd")(type "KiCad")(uri "${KIPRJMOD}/libs/3rdparty/kbd-master/kbd-master/kicad-footprints/kbd.pretty")(options "")(descr ""))
   (lib (name "Keebio-Parts")(type "KiCad")(uri "${KIPRJMOD}/libs/3rdparty/Keebio-Parts.pretty-master/Keebio-Parts.pretty-master")(options "")(descr ""))
-  (lib (name "footprints")(type "KiCad")(uri "C:/Users/chewtoy/Documents/KiCad/6.0/footprints")(options "")(descr ""))
 )
