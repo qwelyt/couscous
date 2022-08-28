@@ -1,0 +1,9 @@
+(sym_lib_table
+  (lib (name "qwelyt")(type "KiCad")(uri "${KIPRJMOD}/libs/qwelyt/qwelyt.kicad_sym")(options "")(descr ""))
+  (lib (name "Seeeduino XIAO")(type "Legacy")(uri "${KIPRJMOD}/libs/3rdparty/Seeeduino XIAO KICAD/Seeeduino XIAO KICAD/Seeeduino XIAO.lib")(options "")(descr ""))
+  (lib (name "kbd")(type "Legacy")(uri "${KIPRJMOD}/libs/3rdparty/kbd-master/kbd-master/kicad-symbols/kbd.lib")(options "")(descr ""))
+  (lib (name "keebio")(type "Legacy")(uri "${KIPRJMOD}/libs/3rdparty/keebio-components-master/keebio-components-master/keebio.lib")(options "")(descr ""))
+  (lib (name "marbastlib-choc")(type "KiCad")(uri "${KIPRJMOD}/libs/3rdparty/marbastlib-main/marbastlib-main/marbastlib-choc.kicad_sym")(options "")(descr ""))
+  (lib (name "marbastlib-mx")(type "KiCad")(uri "${KIPRJMOD}/libs/3rdparty/marbastlib-main/marbastlib-main/marbastlib-mx.kicad_sym")(options "")(descr ""))
+  (lib (name "marbastlib-various")(type "KiCad")(uri "${KIPRJMOD}/libs/3rdparty/marbastlib-main/marbastlib-main/marbastlib-various.kicad_sym")(options "")(descr ""))
+)
