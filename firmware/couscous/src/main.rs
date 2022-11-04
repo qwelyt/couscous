@@ -1,76 +1,90 @@
 #![no_std]
 #![no_main]
 
-
 use embedded_hal::digital::v2::OutputPin;
-// Ensure we halt the program on panic (if we don't mention this crate it won't
-// be linked)
 use panic_halt as _;
-use rp2040_hal::gpio::{Output, Pin, PushPull};
-use rp2040_hal::gpio::bank0::Gpio25;
-use rp2040_hal::pac;
-use rtic::app;
+use rp2040_hal::{Clock, pac};
+use seeeduino_xiao_rp2040::entry;
 use seeeduino_xiao_rp2040::hal;
-use systick_monotonic::{fugit::Duration, Systick};
 
-#[rtic::app(device = seeeduino_xiao_rp2040::pac, dispatchers = [TIMER_IRQ_0])]
-mod app {
-    use super::*;
+// use heapless::Vec;
+// use rp2040_hal::gpio::{AnyPin, Output};
 
-    #[shared]
-    struct Shared {}
+#[entry]
+fn main() -> ! {
+    let mut pac = pac::Peripherals::take().unwrap();
+    let core = pac::CorePeripherals::take().unwrap();
 
-    #[local]
-    struct Local {
-        led: Pin<Gpio25, Output<PushPull>>,
-        state: bool,
-    }
+    // Set up the watchdog driver - needed by the clock setup code
+    let mut watchdog = hal::Watchdog::new(pac.WATCHDOG);
 
-    #[monotonic(binds = SysTick, default = true)]
-    type MonoTimer = Systick<1000>;
+    // Configure the clocks
+    //
+    // The default is to generate a 125 MHz system clock
+    let clocks = hal::clocks::init_clocks_and_plls(
+        seeeduino_xiao_rp2040::XOSC_CRYSTAL_FREQ,
+        pac.XOSC,
+        pac.CLOCKS,
+        pac.PLL_SYS,
+        pac.PLL_USB,
+        &mut pac.RESETS,
+        &mut watchdog,
+    )
+        .ok()
+        .unwrap();
 
-    #[init]
-    fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
-        // Grab our singleton objects
-        let mut pac = pac::Peripherals::take().unwrap();
+    // The single-cycle I/O block controls our GPIO pins
+    let sio = hal::Sio::new(pac.SIO);
 
-        // The single-cycle I/O block controls our GPIO pins
-        let sio = hal::Sio::new(pac.SIO);
+    // Set the pins up according to their function on this particular board
+    let pins = seeeduino_xiao_rp2040::Pins::new(
+        pac.IO_BANK0,
+        pac.PADS_BANK0,
+        sio.gpio_bank0,
+        &mut pac.RESETS,
+    );
 
-        // Set the pins up according to their function on this particular board
-        let pins = seeeduino_xiao_rp2040::Pins::new(
-            pac.IO_BANK0,
-            pac.PADS_BANK0,
-            sio.gpio_bank0,
-            &mut pac.RESETS,
-        );
+    // The delay object lets us wait for specified amounts of time (in
+    // milliseconds)
+    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
 
-        let mono = Systick::new(cx.core.SYST, 36_000_000);
+    let mut green = pins.led_green.into_push_pull_output();
+    let mut blue = pins.led_blue.into_push_pull_output();
+    let mut red = pins.led_red.into_push_pull_output();
+    green.set_low().unwrap();
+    blue.set_low().unwrap();
+    red.set_low().unwrap();
+    // let mut leds : Vec<AnyPin<Id=_, Mode=_, Type=_>, 8>= Vec::new();
+    // leds.push(green).unwrap();
+    // leds.push(blue).unwrap();
+    // leds.push(red).unwrap();
 
-        let mut led: Pin<Gpio25, Output<PushPull>> = pins.led_blue.into_push_pull_output();
-        led.set_low().unwrap();
+    // for led in leds.iter_mut() {
+    //     led.set_low().unwrap();
+    // }
 
-        blink::spawn_after(Duration::<u64, 1, 1000>::from_ticks(1000)).unwrap();
+    loop {
+        // for led in leds.iter_mut() {
+        //     led.set_low().unwrap();
+        //     delay.delay_ms(200);
+        // }
+        green.set_high().unwrap();
+        delay.delay_ms(500);
+        blue.set_high().unwrap();
+        delay.delay_ms(500);
+        red.set_high().unwrap();
 
-        (
-            Shared {},
-            Local {
-                led: led,
-                state: false,
-            },
-            init::Monotonics(mono)
-        )
-    }
+        delay.delay_ms(500);
+        // for led in leds.iter_mut() {
+        //     led.set_high().unwrap();
+        //     delay.delay_ms(200);
+        // }
+        green.set_low().unwrap();
+        delay.delay_ms(500);
+        blue.set_low().unwrap();
+        delay.delay_ms(500);
+        red.set_low().unwrap();
 
-    #[task(local = [led, state])]
-    fn blink(cx: blink::Context) {
-        if *cx.local.state {
-            cx.local.led.set_high().unwrap();
-            *cx.local.state = false
-        } else {
-            cx.local.led.set_low().unwrap();
-            *cx.local.state = true;
-        }
-        blink::spawn_after(Duration::<u64, 1, 1000>::from_ticks(1000)).unwrap();
+        delay.delay_ms(500);
     }
 }
