@@ -4,6 +4,7 @@
 use embedded_hal::digital::v2::OutputPin;
 use panic_halt as _;
 use rp2040_hal::{Clock, pac};
+use rp2040_hal::gpio::DynPin;
 use seeeduino_xiao_rp2040::entry;
 use seeeduino_xiao_rp2040::hal;
 
@@ -48,42 +49,27 @@ fn main() -> ! {
     // milliseconds)
     let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
 
-    let mut green = pins.led_green.into_push_pull_output();
-    let mut blue = pins.led_blue.into_push_pull_output();
-    let mut red = pins.led_red.into_push_pull_output();
-    green.set_low().unwrap();
-    blue.set_low().unwrap();
-    red.set_low().unwrap();
-    // let mut leds : Vec<AnyPin<Id=_, Mode=_, Type=_>, 8>= Vec::new();
-    // leds.push(green).unwrap();
-    // leds.push(blue).unwrap();
-    // leds.push(red).unwrap();
+    let green: DynPin = pins.led_green.into_push_pull_output().into();
+    let blue: DynPin = pins.led_blue.into_push_pull_output().into();
+    let red: DynPin = pins.led_red.into_push_pull_output().into();
 
-    // for led in leds.iter_mut() {
-    //     led.set_low().unwrap();
-    // }
+    let mut leds = [green, blue, red];
+
+    for led in leds.iter_mut() {
+        led.set_low().unwrap();
+    }
 
     loop {
-        // for led in leds.iter_mut() {
-        //     led.set_low().unwrap();
-        //     delay.delay_ms(200);
-        // }
-        green.set_high().unwrap();
-        delay.delay_ms(500);
-        blue.set_high().unwrap();
-        delay.delay_ms(500);
-        red.set_high().unwrap();
+        for led in leds.iter_mut() {
+            led.set_low().unwrap();
+            delay.delay_ms(200);
+        }
 
         delay.delay_ms(500);
-        // for led in leds.iter_mut() {
-        //     led.set_high().unwrap();
-        //     delay.delay_ms(200);
-        // }
-        green.set_low().unwrap();
-        delay.delay_ms(500);
-        blue.set_low().unwrap();
-        delay.delay_ms(500);
-        red.set_low().unwrap();
+        for led in leds.iter_mut() {
+            led.set_high().unwrap();
+            delay.delay_ms(200);
+        }
 
         delay.delay_ms(500);
     }
