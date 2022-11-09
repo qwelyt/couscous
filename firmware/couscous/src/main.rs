@@ -1,9 +1,11 @@
 #![no_std]
 #![no_main]
 
+#[allow(unused, unused_variables, unused_mut)]
 use core::iter::once;
 
-use embedded_hal::digital::v2::OutputPin;
+use embedded_hal::digital::v2::{InputPin, OutputPin};
+use embedded_hal::prelude::_embedded_hal_blocking_spi_Write;
 use panic_halt as _;
 use rp2040_hal::{Clock, gpio::DynPin, pac, pio::PIOExt, Timer};
 use seeeduino_xiao_rp2040::entry;
@@ -66,51 +68,44 @@ fn main() -> ! {
     // milliseconds)
     let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
 
-    let green: DynPin = pins.led_green.into_push_pull_output().into();
-    let blue: DynPin = pins.led_blue.into_push_pull_output().into();
-    let red: DynPin = pins.led_red.into_push_pull_output().into();
+    let mut green: DynPin = pins.led_green.into_push_pull_output().into();
+    let mut blue: DynPin = pins.led_blue.into_push_pull_output().into();
+    let mut red: DynPin = pins.led_red.into_push_pull_output().into();
+    green.set_low().unwrap();
+    blue.set_low().unwrap();
+    red.set_low().unwrap();
 
-    let x: DynPin = pins.a0.into_push_pull_output().into();
+    let mut pin5: DynPin = pins.sda.into_pull_down_input().into();
+    let mut pin6: DynPin = pins.scl.into_push_pull_output().into();
 
-    let mut leds = [green, blue, red];
-
-    for led in leds.iter_mut() {
-        led.set_low().unwrap();
-    }
-    let mut pins = [x];
-    for pin in pins.iter_mut() {
-        pin.set_low().unwrap();
-    }
-
-    let mut n: u8 = 128;
     loop {
-        ws.write(brightness(once(wheel(n)), 32)).unwrap();
-        n = n.wrapping_add(1);
+        pin5.into_pull_down_input();
+        pin6.into_push_pull_output();
+        pin6.set_high().unwrap();
 
-        for led in leds.iter_mut() {
-            led.set_low().unwrap();
-            delay.delay_ms(200);
-        }
-        for pin in pins.iter_mut() {
-            pin.into_pull_down_input();
-        }
+        let blu = pin5.is_high().unwrap();
+        pin6.set_low().unwrap();
 
-        delay.delay_ms(500);
-        for led in leds.iter_mut() {
-            led.set_high().unwrap();
-            delay.delay_ms(200);
-        }
-        for pin in pins.iter_mut() {
-            pin.into_push_pull_output();
-        }
+        pin6.into_pull_down_input();
+        pin5.into_push_pull_output();
+        pin5.set_high().unwrap();
+        let gre = pin6.is_high().unwrap();
+        pin5.set_low().unwrap();
 
-        delay.delay_ms(500);
+
+        if blu && gre {
+            ws.write(brightness(once(wheel(192)), 32)).unwrap();
+        } else if blu {
+            ws.write(brightness(once(wheel(128)), 32)).unwrap();
+        } else if gre {
+            ws.write(brightness(once(wheel(64)), 32)).unwrap();
+        } else {
+            ws.write(brightness(once(wheel(255)), 32)).unwrap();
+        }
+        delay.delay_ms(200);
     }
 }
 
-/// Convert a number from `0..=255` to an RGB color triplet.
-///
-/// The colours are a transition from red, to green, to blue and back to red.
 fn wheel(mut wheel_pos: u8) -> RGB8 {
     wheel_pos = 255 - wheel_pos;
     if wheel_pos < 85 {
