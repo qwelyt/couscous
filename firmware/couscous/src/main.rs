@@ -11,9 +11,12 @@ mod app {
     use embedded_hal::digital::v2::{InputPin, OutputPin};
     use embedded_hal::prelude::_embedded_hal_blocking_spi_Write;
     use rp2040_hal::{Clock, gpio::DynPin, pac, pio::PIOExt, Timer};
+    use rp2040_hal::gpio::{DynPinId, DynPinMode, PinId, PinMode};
+    use rp2040_hal::pio::{SM0, StateMachine, StateMachineIndex, ValidStateMachine};
     use rp2040_hal::timer::CountDown;
     use seeeduino_xiao_rp2040::entry;
     use seeeduino_xiao_rp2040::hal;
+    use seeeduino_xiao_rp2040::pac::PIO0;
     use smart_leds::{brightness, RGB8, SmartLedsWrite};
     use systick_monotonic::{fugit::Duration, Systick};
     use ws2812_pio::Ws2812;
@@ -25,14 +28,11 @@ mod app {
     struct Local {
         pin5: DynPin,
         pin6: DynPin,
-        ws: Ws2812<(), (), CountDown, ()>,
+        neo: Ws2812<PIO0, SM0, CountDown<'_>, dyn PinId<Reset=<(PinMode + 'static) as Trait>::Output>>,
     }
 
     #[init(
-    local = [
-    pio: () = None,
-    timer: Timer = None
-    ]
+    local = []
     )]
     fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
         let mut pac = cx.device;
@@ -57,10 +57,8 @@ mod app {
             &mut pac.RESETS,
         );
         let timer = Timer::new(pac.TIMER, &mut pac.RESETS);
-        let mut pio = None;
-        let (mut p, sm0, _, _, _) = pac.PIO0.split(&mut pac.RESETS);
-        pio = p;
-        let mut ws: Ws2812<(), (), CountDown, ()> = Ws2812::new(
+        let (mut pio, sm0, _, _, _) = pac.PIO0.split(&mut pac.RESETS);
+        let ws = Ws2812::new(
             pins.neopixel_data.into_mode(),
             &mut pio,
             sm0,
@@ -76,27 +74,32 @@ mod app {
             Local {
                 pin5: pins.sda.into(),
                 pin6: pins.scl.into(),
-                ws,
+                neo: ws.into(),
             },
             init::Monotonics()
         )
     }
 
-    #[task(local = [pin5, pin6, ws])]
+    #[task(local = [pin5, pin6, neo])]
     fn scan_n_stuff(mut cx: scan_n_stuff::Context) {
         *cx.local.pin6.into_pull_down_input();
         *cx.local.pin5.into_push_pull_output();
         *cx.local.pin5.set_high().unwrap();
-        g = cx.local.pin5_is_high().unwrap();
+        let g = cx.local.pin5_is_high().unwrap();
+
+        *cx.local.pin5.into_pull_down_input();
+        *cx.local.pin6.into_push_pull_output();
+        *cx.local.pin6.set_high().unwrap();
+        let b = cx.local.pin6_is_high().unwrap();
 
         if b && g {
-            ws.write(brightness(once(wheel(192)), 32)).unwrap();
+            cx.local.neo.write(brightness(once(wheel(192)), 32)).unwrap();
         } else if b {
-            ws.write(brightness(once(wheel(128)), 32)).unwrap();
+            cx.local.neo.write(brightness(once(wheel(128)), 32)).unwrap();
         } else if g {
-            ws.write(brightness(once(wheel(64)), 32)).unwrap();
+            cx.local.neo.write(brightness(once(wheel(64)), 32)).unwrap();
         } else {
-            ws.write(brightness(once(wheel(255)), 32)).unwrap();
+            cx.local.neo.write(brightness(once(wheel(255)), 32)).unwrap();
         }
     }
 
