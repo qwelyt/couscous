@@ -4,7 +4,7 @@
 #[allow(unused, unused_variables, unused_mut)]
 use panic_halt as _;
 
-#[rtic::app(device = seeeduino_xiao_rp2040::pac, dispatchers = [PIO0_IRQ_0])]
+#[rtic::app(device = seeeduino_xiao_rp2040::pac, dispatchers = [SPI0_IRQ])]
 mod app {
     use core::iter::once;
 
@@ -14,12 +14,12 @@ mod app {
     use rp2040_hal::gpio::{DynPinId, DynPinMode, PinId, PinMode};
     use rp2040_hal::pio::{SM0, StateMachine, StateMachineIndex, ValidStateMachine};
     use rp2040_hal::timer::CountDown;
+    use rp2040_monotonic::{ExtU64, Rp2040Monotonic};
     use seeeduino_xiao_rp2040::entry;
     use seeeduino_xiao_rp2040::hal;
     use seeeduino_xiao_rp2040::pac::PIO0;
     use smart_leds::{brightness, RGB8, SmartLedsWrite};
-    use systick_monotonic::{fugit::Duration, Systick};
-    use ws2812_pio::Ws2812;
+    use ws2812_pio::{Ws2812, Ws2812Direct};
 
     #[shared]
     struct Shared {}
@@ -28,12 +28,13 @@ mod app {
     struct Local {
         pin5: DynPin,
         pin6: DynPin,
-        neo: Ws2812<PIO0, SM0, CountDown<'_>, dyn PinId<Reset=<(PinMode + 'static) as Trait>::Output>>,
+        neo: Ws2812Direct<PIO0, SM0, hal::gpio::bank0::Gpio12>,
     }
 
-    #[init(
-    local = []
-    )]
+    #[monotonic(binds = TIMER_IRQ_0, default = true)]
+    type MoMono = Rp2040Monotonic;
+
+    #[init]
     fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
         let mut pac = cx.device;
         let mut watchdog = hal::Watchdog::new(pac.WATCHDOG);
@@ -56,41 +57,42 @@ mod app {
             sio.gpio_bank0,
             &mut pac.RESETS,
         );
-        let timer = Timer::new(pac.TIMER, &mut pac.RESETS);
         let (mut pio, sm0, _, _, _) = pac.PIO0.split(&mut pac.RESETS);
-        let ws = Ws2812::new(
+        let mut ws = Ws2812Direct::new(
             pins.neopixel_data.into_mode(),
             &mut pio,
             sm0,
             clocks.peripheral_clock.freq(),
-            timer.count_down(),
         );
         let mut neopower = pins.neopixel_power.into_push_pull_output();
         neopower.set_high().unwrap();
-        scan_n_stuff::spawn().ok();
+        let mono = rp2040_monotonic::Rp2040Monotonic::new(pac.TIMER);
+        ws.write(brightness(once(wheel(20)), 32)).unwrap();
+
+        scan_n_stuff::spawn_after(60.micros()).ok();
 
         (
             Shared {},
             Local {
                 pin5: pins.sda.into(),
                 pin6: pins.scl.into(),
-                neo: ws.into(),
+                neo: ws,
             },
-            init::Monotonics()
+            init::Monotonics(mono)
         )
     }
 
     #[task(local = [pin5, pin6, neo])]
-    fn scan_n_stuff(mut cx: scan_n_stuff::Context) {
-        *cx.local.pin6.into_pull_down_input();
-        *cx.local.pin5.into_push_pull_output();
-        *cx.local.pin5.set_high().unwrap();
-        let g = cx.local.pin5_is_high().unwrap();
+    fn scan_n_stuff(cx: scan_n_stuff::Context) {
+        cx.local.pin6.into_pull_down_input();
+        cx.local.pin5.into_push_pull_output();
+        cx.local.pin5.set_high().unwrap();
+        let g = cx.local.pin5.is_high().unwrap();
 
-        *cx.local.pin5.into_pull_down_input();
-        *cx.local.pin6.into_push_pull_output();
-        *cx.local.pin6.set_high().unwrap();
-        let b = cx.local.pin6_is_high().unwrap();
+        cx.local.pin5.into_pull_down_input();
+        cx.local.pin6.into_push_pull_output();
+        cx.local.pin6.set_high().unwrap();
+        let b = cx.local.pin6.is_high().unwrap();
 
         if b && g {
             cx.local.neo.write(brightness(once(wheel(192)), 32)).unwrap();
@@ -101,6 +103,7 @@ mod app {
         } else {
             cx.local.neo.write(brightness(once(wheel(255)), 32)).unwrap();
         }
+        scan_n_stuff::spawn_after(60.micros()).ok();
     }
 
     fn wheel(mut wheel_pos: u8) -> RGB8 {
