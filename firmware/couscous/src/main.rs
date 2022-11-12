@@ -69,7 +69,7 @@ mod app {
         let mono = rp2040_monotonic::Rp2040Monotonic::new(pac.TIMER);
         ws.write(brightness(once(wheel(20)), 32)).unwrap();
 
-        scan_n_stuff::spawn_after(60.micros()).ok();
+        scan_n_stuff::spawn_after(60.millis()).ok();
 
         (
             Shared {},
@@ -87,12 +87,12 @@ mod app {
         cx.local.pin6.into_pull_down_input();
         cx.local.pin5.into_push_pull_output();
         cx.local.pin5.set_high().unwrap();
-        let g = cx.local.pin5.is_high().unwrap();
+        let g = cx.local.pin6.is_high().unwrap();
 
         cx.local.pin5.into_pull_down_input();
         cx.local.pin6.into_push_pull_output();
         cx.local.pin6.set_high().unwrap();
-        let b = cx.local.pin6.is_high().unwrap();
+        let b = cx.local.pin5.is_high().unwrap();
 
         if b && g {
             cx.local.neo.write(brightness(once(wheel(192)), 32)).unwrap();
@@ -103,7 +103,7 @@ mod app {
         } else {
             cx.local.neo.write(brightness(once(wheel(255)), 32)).unwrap();
         }
-        scan_n_stuff::spawn_after(60.micros()).ok();
+        scan_n_stuff::spawn_after(60.millis()).ok();
     }
 
     fn wheel(mut wheel_pos: u8) -> RGB8 {
