@@ -24,10 +24,15 @@ mod app {
     #[shared]
     struct Shared {}
 
+    // Set up pins with rows and cols
+    // Loop thru them and mark which combos are active
+    // As we have double cols, make sure to add extra index somehow
+    // store the marked state in shared
+    // run a task to check if state has changed and run task to send usb datagram
     #[local]
     struct Local {
-        pin5: DynPin,
-        pin6: DynPin,
+        rows: [DynPin; 5],
+        cols: [DynPin; 6],
         neo: Ws2812Direct<PIO0, SM0, hal::gpio::bank0::Gpio12>,
     }
 
@@ -74,34 +79,21 @@ mod app {
         (
             Shared {},
             Local {
-                pin5: pins.sda.into(),
-                pin6: pins.scl.into(),
+                rows: [pins.a0.into(), pins.a1.into(), pins.a2.into(), pins.a3.into(), pins.sda.into()],
+                cols: [pins.scl.into(), pins.tx.into(), pins.mosi.into(), pins.miso.into(), pins.sck.into(), pins.rx.into()],
                 neo: ws,
             },
             init::Monotonics(mono)
         )
     }
 
-    #[task(local = [pin5, pin6, neo])]
+    #[task(local = [rows, cols, neo])]
     fn scan_n_stuff(cx: scan_n_stuff::Context) {
-        cx.local.pin6.into_pull_down_input();
-        cx.local.pin5.into_push_pull_output();
-        cx.local.pin5.set_high().unwrap();
-        let g = cx.local.pin6.is_high().unwrap();
-
-        cx.local.pin5.into_pull_down_input();
-        cx.local.pin6.into_push_pull_output();
-        cx.local.pin6.set_high().unwrap();
-        let b = cx.local.pin5.is_high().unwrap();
-
-        if b && g {
-            cx.local.neo.write(brightness(once(wheel(192)), 32)).unwrap();
-        } else if b {
-            cx.local.neo.write(brightness(once(wheel(128)), 32)).unwrap();
-        } else if g {
-            cx.local.neo.write(brightness(once(wheel(64)), 32)).unwrap();
-        } else {
-            cx.local.neo.write(brightness(once(wheel(255)), 32)).unwrap();
+        for row in cx.local.rows {
+            row.into_push_pull_output();
+        }
+        for col in cx.local.cols {
+            col.into_pull_down_input();
         }
         scan_n_stuff::spawn_after(60.millis()).ok();
     }
