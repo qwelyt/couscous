@@ -96,7 +96,7 @@ mod app {
         )
     }
 
-    #[task(local = [rows, cols, neo], shared = [current_state])]
+    #[task(local = [rows, cols], shared = [current_state])]
     fn scan(mut cx: scan::Context) {
         let rows = cx.local.rows;
         let cols = cx.local.cols;
@@ -116,7 +116,7 @@ mod app {
         check_state::spawn().ok();
     }
 
-    #[task(shared = [current_state, last_state])]
+    #[task(local = [neo, wheel_pos: u8 = 1], shared = [current_state, last_state])]
     fn check_state(mut cx: check_state::Context) {
         let current_state = cx.shared.current_state;
         let last_state = cx.shared.last_state;
@@ -126,6 +126,8 @@ mod app {
                 // Nothing has changed
             } else {
                 // send_new_report();
+                cx.local.neo.write(brightness(once(wheel(*cx.local.wheel_pos)), 32)).unwrap();
+                *cx.local.wheel_pos = *cx.local.wheel_pos + 10 % 255;
                 last_state.clear();
                 for pos in current_state.iter() {
                     last_state.insert(*pos).unwrap();
