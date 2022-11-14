@@ -8,8 +8,11 @@ use panic_halt as _;
 mod app {
     use core::iter::once;
 
+    use cortex_m::asm::delay;
     use embedded_hal::digital::v2::{InputPin, OutputPin};
     use embedded_hal::prelude::_embedded_hal_blocking_spi_Write;
+    use hash32::{BuildHasherDefault, FnvHasher};
+    use heapless::{FnvIndexSet, IndexSet, Vec};
     use rp2040_hal::{Clock, gpio::DynPin, pac, pio::PIOExt, Timer};
     use rp2040_hal::gpio::{DynPinId, DynPinMode, PinId, PinMode};
     use rp2040_hal::pio::{SM0, StateMachine, StateMachineIndex, ValidStateMachine};
@@ -22,7 +25,10 @@ mod app {
     use ws2812_pio::{Ws2812, Ws2812Direct};
 
     #[shared]
-    struct Shared {}
+    struct Shared {
+        current_state: IndexSet<(u8, u8), BuildHasherDefault<FnvHasher>, 64>,
+        last_state: IndexSet<(u8, u8), BuildHasherDefault<FnvHasher>, 64>,
+    }
 
     // Set up pins with rows and cols
     // Loop thru them and mark which combos are active
@@ -74,10 +80,13 @@ mod app {
         let mono = rp2040_monotonic::Rp2040Monotonic::new(pac.TIMER);
         ws.write(brightness(once(wheel(20)), 32)).unwrap();
 
-        scan_n_stuff::spawn_after(60.millis()).ok();
+        scan::spawn_after(60.millis()).ok();
 
         (
-            Shared {},
+            Shared {
+                current_state: FnvIndexSet::new(),
+                last_state: FnvIndexSet::new(),
+            },
             Local {
                 rows: [pins.a0.into(), pins.a1.into(), pins.a2.into(), pins.a3.into(), pins.sda.into()],
                 cols: [pins.scl.into(), pins.tx.into(), pins.mosi.into(), pins.miso.into(), pins.sck.into(), pins.rx.into()],
@@ -87,15 +96,59 @@ mod app {
         )
     }
 
-    #[task(local = [rows, cols, neo])]
-    fn scan_n_stuff(cx: scan_n_stuff::Context) {
-        for row in cx.local.rows {
+    #[task(local = [rows, cols, neo], shared = [current_state])]
+    fn scan(mut cx: scan::Context) {
+        let rows = cx.local.rows;
+        let cols = cx.local.cols;
+
+        let scan1 = scan_matrix(rows, cols);
+        // Debounce
+        delay(20);
+        let scan2 = scan_matrix(rows, cols);
+
+        cx.shared.current_state.lock(|current_state| {
+            current_state.clear();
+            let x: IndexSet<&(u8, u8), BuildHasherDefault<FnvHasher>, 64> = scan1.intersection(&scan2).collect();
+            for pos in x.iter() {
+                current_state.insert(**pos).unwrap();
+            }
+        });
+        check_state::spawn().ok();
+    }
+
+    #[task(shared = [current_state, last_state])]
+    fn check_state(mut cx: check_state::Context) {
+        let current_state = cx.shared.current_state;
+        let last_state = cx.shared.last_state;
+
+        (current_state, last_state).lock(|current_state, last_state| {
+            if *(&last_state.eq(&current_state)) {
+                // Nothing has changed
+            } else {
+                // send_new_report();
+                last_state.clear();
+                for pos in current_state.iter() {
+                    last_state.insert(*pos).unwrap();
+                }
+            }
+        });
+
+        scan::spawn().ok();
+    }
+
+    fn scan_matrix(rows: &mut [DynPin; 5], cols: &mut [DynPin; 6]) -> IndexSet<(u8, u8), BuildHasherDefault<FnvHasher>, 64> {
+        let mut pressed = FnvIndexSet::<(u8, u8), 64>::new();
+        for (r, row) in rows.iter_mut().enumerate() {
             row.into_push_pull_output();
+            row.set_high().unwrap();
+            for (c, col) in cols.iter_mut().enumerate() {
+                col.into_pull_down_input();
+                if col.is_high().unwrap() {
+                    pressed.insert((u8::try_from(r).unwrap(), u8::try_from(c).unwrap())).unwrap();
+                }
+            }
         }
-        for col in cx.local.cols {
-            col.into_pull_down_input();
-        }
-        scan_n_stuff::spawn_after(60.millis()).ok();
+        pressed
     }
 
     fn wheel(mut wheel_pos: u8) -> RGB8 {
