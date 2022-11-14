@@ -26,8 +26,8 @@ mod app {
 
     #[shared]
     struct Shared {
-        current_state: IndexSet<(u8, u8), BuildHasherDefault<FnvHasher>, 64>,
-        last_state: IndexSet<(u8, u8), BuildHasherDefault<FnvHasher>, 64>,
+        current_state: IndexSet<(u8, u8, bool), BuildHasherDefault<FnvHasher>, 64>,
+        last_state: IndexSet<(u8, u8, bool), BuildHasherDefault<FnvHasher>, 64>,
     }
 
     // Set up pins with rows and cols
@@ -108,7 +108,7 @@ mod app {
 
         cx.shared.current_state.lock(|current_state| {
             current_state.clear();
-            let x: IndexSet<&(u8, u8), BuildHasherDefault<FnvHasher>, 64> = scan1.intersection(&scan2).collect();
+            let x: IndexSet<&(u8, u8, bool), BuildHasherDefault<FnvHasher>, 64> = scan1.intersection(&scan2).collect();
             for pos in x.iter() {
                 current_state.insert(**pos).unwrap();
             }
@@ -138,16 +138,26 @@ mod app {
         scan::spawn().ok();
     }
 
-    fn scan_matrix(rows: &mut [DynPin; 5], cols: &mut [DynPin; 6]) -> IndexSet<(u8, u8), BuildHasherDefault<FnvHasher>, 64> {
-        let mut pressed = FnvIndexSet::<(u8, u8), 64>::new();
+    fn scan_matrix(rows: &mut [DynPin; 5], cols: &mut [DynPin; 6]) -> IndexSet<(u8, u8, bool), BuildHasherDefault<FnvHasher>, 64> {
+        let mut pressed = FnvIndexSet::<(u8, u8, bool), 64>::new();
         for (r, row) in rows.iter_mut().enumerate() {
             row.into_push_pull_output();
             row.set_high().unwrap();
             for (c, col) in cols.iter_mut().enumerate() {
                 col.into_pull_down_input();
                 if col.is_high().unwrap() {
-                    pressed.insert((u8::try_from(r).unwrap(), u8::try_from(c).unwrap())).unwrap();
+                    pressed.insert((u8::try_from(r).unwrap(), u8::try_from(c).unwrap(), false)).unwrap();
                 }
+            }
+            row.set_low().unwrap();
+            row.into_pull_down_input();
+            for (c, col) in cols.iter_mut().enumerate() {
+                col.into_push_pull_output();
+                col.set_high().unwrap();
+                if row.is_high().unwrap() {
+                    pressed.insert((u8::try_from(r).unwrap(), u8::try_from(c).unwrap(), true)).unwrap();
+                }
+                col.set_low().unwrap();
             }
         }
         pressed
