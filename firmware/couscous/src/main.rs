@@ -6,6 +6,8 @@ use panic_halt as _;
 
 #[rtic::app(device = seeeduino_xiao_rp2040::pac, dispatchers = [SPI0_IRQ])]
 mod app {
+    use core::fmt;
+    use core::fmt::Write;
     use core::iter::once;
 
     use cortex_m::asm::delay;
@@ -22,12 +24,30 @@ mod app {
     use seeeduino_xiao_rp2040::hal;
     use seeeduino_xiao_rp2040::pac::PIO0;
     use smart_leds::{brightness, RGB8, SmartLedsWrite};
+    // USB Device support
+    use usb_device::{class_prelude::*, prelude::*};
+    use usbd_hid::hid_class::HIDClass;
+    use usbd_serial::SerialPort;
     use ws2812_pio::{Ws2812, Ws2812Direct};
+
+    /// Wrapper around a usb-cdc SerialPort
+    /// to be able to use the `write!()` macro with it
+    pub struct DebugPort<'a>(SerialPort<'a, hal::usb::UsbBus>);
+
+    impl<'a> Write for DebugPort<'a> {
+        fn write_str(&mut self, s: &str) -> fmt::Result {
+            let _ = self.0.write(s.as_bytes());
+            Ok(())
+        }
+    }
 
     #[shared]
     struct Shared {
         current_state: IndexSet<(u8, u8, bool), BuildHasherDefault<FnvHasher>, 64>,
         last_state: IndexSet<(u8, u8, bool), BuildHasherDefault<FnvHasher>, 64>,
+        usb_device: UsbDevice<'static, hal::usb::UsbBus>,
+        debug_port: DebugPort<'static>,
+        hid_device: HIDClass<'static, hal::usb::UsbBus>,
     }
 
     // Set up pins with rows and cols
@@ -45,7 +65,10 @@ mod app {
     #[monotonic(binds = TIMER_IRQ_0, default = true)]
     type MoMono = Rp2040Monotonic;
 
-    #[init]
+    #[init(local = [
+    // any local for `init()` will have a static lifetime
+    usb_bus: Option < usb_device::bus::UsbBusAllocator < hal::usb::UsbBus >> = None,
+    ])]
     fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
         let mut pac = cx.device;
         let mut watchdog = hal::Watchdog::new(pac.WATCHDOG);
@@ -80,12 +103,75 @@ mod app {
         let mono = rp2040_monotonic::Rp2040Monotonic::new(pac.TIMER);
         ws.write(brightness(once(wheel(20)), 32)).unwrap();
 
+        // Set up the USB driver
+        // We do this last in the init function so that we can enable interrupts as soon as
+        // possible to make sure that `poll` is called as soon as possible. This is the recommended
+        // workaround described here: https://docs.rs/rp2040-hal/latest/rp2040_hal/usb/index.html.
+        // It might be better to just set `.max_packet_size_ep0(64)` as also described in the
+        // documentation, instead of having racy code.
+        let usb_bus = cx
+            .local
+            .usb_bus
+            .insert(UsbBusAllocator::new(hal::usb::UsbBus::new(
+                pac.USBCTRL_REGS,
+                pac.USBCTRL_DPRAM,
+                clocks.usb_clock,
+                true,
+                &mut pac.RESETS,
+            )));
+
+        // Set up the USB Communications Class Device driver for debugging
+        let debug_port = DebugPort(SerialPort::new(usb_bus));
+
+        const DESCRIPTOR: &[u8] = &[
+            //  Keyboard
+            0x05, 0x01,                    // USAGE_PAGE (Generic Desktop)
+            0x09, 0x06,                    // USAGE (Keyboard)
+            0xa1, 0x01,                    // COLLECTION (Application)
+            0x85, 0x02,                    //   REPORT_ID (2)
+            0x05, 0x07,                    //   USAGE_PAGE (Keyboard)
+
+            0x19, 0xe0,                    //   USAGE_MINIMUM (Keyboard LeftControl)
+            0x29, 0xe7,                    //   USAGE_MAXIMUM (Keyboard RightGUI)
+            0x15, 0x00,                    //   LOGICAL_MINIMUM (0)
+            0x25, 0x01,                    //   LOGICAL_MAXIMUM (1)
+            0x75, 0x01,                    //   REPORT_SIZE (1)
+
+            0x95, 0x08,                      //   REPORT_COUNT (8)
+            0x81, 0x02,                    //   INPUT (Data,Var,Abs)
+            0x95, 0x01,                    //   REPORT_COUNT (1)
+            0x75, 0x08,                    //   REPORT_SIZE (8)
+            0x81, 0x03,                    //   INPUT (Cnst,Var,Abs)
+
+            0x95, 0x06,                      //   REPORT_COUNT (6)
+            0x75, 0x08,                    //   REPORT_SIZE (8)
+            0x15, 0x00,                    //   LOGICAL_MINIMUM (0)
+            0x25, 0x65,                    //   LOGICAL_MAXIMUM (101)
+            0x05, 0x07,                    //   USAGE_PAGE (Keyboard)
+
+            0x19, 0x00,                      //   USAGE_MINIMUM (Reserved (no event indicated))
+            0x29, 0x65,                    //   USAGE_MAXIMUM (Keyboard Application)
+            0x81, 0x00,                    //   INPUT (Data,Ary,Abs)
+            0xc0,                          // END_COLLECTION
+        ];
+        let hid_device = HIDClass::new(usb_bus, DESCRIPTOR, 20);
+
+        let usb_device = UsbDeviceBuilder::new(usb_bus, UsbVidPid(0x16c0, 0x27dd))
+            .manufacturer("qwelyt")
+            .product("couscous")
+            .serial_number("0.01")
+            .device_class(0)
+            .build();
+
         scan::spawn_after(60.millis()).ok();
 
         (
             Shared {
                 current_state: FnvIndexSet::new(),
                 last_state: FnvIndexSet::new(),
+                usb_device,
+                debug_port,
+                hid_device,
             },
             Local {
                 rows: [pins.a0.into(), pins.a1.into(), pins.a2.into(), pins.a3.into(), pins.sda.into()],
@@ -177,5 +263,23 @@ mod app {
             wheel_pos -= 170;
             (wheel_pos * 3, 255 - (wheel_pos * 3), 0).into()
         }
+    }
+
+    /// This task is responsible for sending HID reports to the connected computer
+    #[task(
+    binds = PIO0_IRQ_0,
+    shared = [debug_port, hid_device, current_state],
+    local = [last_report: [u8; 8] = [0, 0, 0, 0, 0, 0, 0, 0],],
+    )]
+    fn pio0_irq_0(mut cx: pio0_irq_0::Context) {
+        // Check if teh last report we sent matches what state we have now
+        // It it's the same, do nothing (or send the same? probably not)
+        // Or perhaps store the last state we saw and match that. Since one state
+        // could fill up more than one report. We need to be sure we only act on new
+        // states. But then, why do we do check_state if we want to change do a check here
+        // Or even more: Why do any work at all unless we trigger this task? When this task
+        // gets triggerd, we could do the entire scan and check state and send that. That ought
+        // to work just as well. As long as the scanning is not to slow. Then we want to do it
+        // in between.
     }
 }
