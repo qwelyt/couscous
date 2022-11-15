@@ -15,7 +15,7 @@ mod app {
     use embedded_hal::prelude::_embedded_hal_blocking_spi_Write;
     use hash32::{BuildHasherDefault, FnvHasher};
     use heapless::{FnvIndexSet, IndexSet, Vec};
-    use rp2040_hal::{Clock, gpio::DynPin, pac, pio::PIOExt, Timer};
+    use rp2040_hal::{Clock, gpio::DynPin, pac, pio::PIOExt, Sio, Timer};
     use rp2040_hal::gpio::{DynPinId, DynPinMode, PinId, PinMode};
     use rp2040_hal::pio::{SM0, StateMachine, StateMachineIndex, ValidStateMachine};
     use rp2040_hal::timer::CountDown;
@@ -26,9 +26,12 @@ mod app {
     use smart_leds::{brightness, RGB8, SmartLedsWrite};
     // USB Device support
     use usb_device::{class_prelude::*, prelude::*};
+    use usbd_hid::descriptor::KeyboardReport;
     use usbd_hid::hid_class::HIDClass;
     use usbd_serial::SerialPort;
     use ws2812_pio::{Ws2812, Ws2812Direct};
+
+    const REPORT_ID: u8 = 0x01;
 
     /// Wrapper around a usb-cdc SerialPort
     /// to be able to use the `write!()` macro with it
@@ -84,7 +87,7 @@ mod app {
             .ok()
             .unwrap();
 
-        let sio = hal::Sio::new(pac.SIO);
+        let sio = Sio::new(pac.SIO);
         let pins = seeeduino_xiao_rp2040::Pins::new(
             pac.IO_BANK0,
             pac.PADS_BANK0,
@@ -128,7 +131,7 @@ mod app {
             0x05, 0x01,                    // USAGE_PAGE (Generic Desktop)
             0x09, 0x06,                    // USAGE (Keyboard)
             0xa1, 0x01,                    // COLLECTION (Application)
-            0x85, 0x02,                    //   REPORT_ID (2)
+            0x85, REPORT_ID,               //   REPORT_ID
             0x05, 0x07,                    //   USAGE_PAGE (Keyboard)
 
             0x19, 0xe0,                    //   USAGE_MINIMUM (Keyboard LeftControl)
@@ -265,11 +268,38 @@ mod app {
         }
     }
 
+    /// This task is reponsible for polling for USB events
+    /// whenever the USBCTRL_IRQ is raised
+    #[task(binds = USBCTRL_IRQ, shared = [usb_device, debug_port, hid_device])]
+    fn usbctrl_irq(cx: usbctrl_irq::Context) {
+        (
+            cx.shared.usb_device,
+            cx.shared.debug_port,
+            cx.shared.hid_device,
+        )
+            .lock(|usb_device, debug_port, hid_device| {
+                if usb_device.poll(&mut [&mut debug_port.0, hid_device]) {
+                    // DEBUG functionality, if "b" is received
+                    // over the debug serial port we reser to bootloader
+                    let mut buf = [0u8; 64];
+                    if let Ok(x) = debug_port.0.read(&mut buf) {
+                        let bytes = &buf[..x];
+                        if bytes == b"b" {
+                            hal::rom_data::reset_to_usb_boot(0, 0);
+                        }
+                    }
+                }
+            });
+    }
+
     /// This task is responsible for sending HID reports to the connected computer
     #[task(
     binds = PIO0_IRQ_0,
     shared = [debug_port, hid_device, current_state],
-    local = [last_report: [u8; 8] = [0, 0, 0, 0, 0, 0, 0, 0],],
+    local = [
+    last_seen_state: IndexSet < (u8, u8, bool), BuildHasherDefault < FnvHasher >, 64 > = FnvIndexSet::new(),
+    last_report: [u8; 8] = [0, 0, 0, 0, 0, 0, 0, 0],
+    ],
     )]
     fn pio0_irq_0(mut cx: pio0_irq_0::Context) {
         // Check if teh last report we sent matches what state we have now
@@ -281,5 +311,30 @@ mod app {
         // gets triggerd, we could do the entire scan and check state and send that. That ought
         // to work just as well. As long as the scanning is not to slow. Then we want to do it
         // in between.
+        cx.shared.current_state.lock(|current_state| {
+            if *(&cx.local.last_seen_state.eq(&current_state)) {
+                //
+            } else {
+                let report: [u8; 8] = [REPORT_ID, 0, 0x04, 0, 0, 0, 0, 0];
+                cx.shared.hid_device.lock(|hid| {
+                    let kr = KeyboardReport {
+                        modifier: 0,
+                        reserved: 0,
+                        leds: 0,
+                        keycodes: [0x04, 0, 0, 0, 0, 0],
+                    };
+                    if let Err(e) = hid.push_input(&kr) {
+                        let _ = cx
+                            .shared
+                            .debug_port
+                            .lock(|dp| write!(dp, "got error when pushing hid: {e:?}\r\n"));
+                    }
+                });
+                cx.local.last_seen_state.clear();
+                for pos in current_state.iter() {
+                    cx.local.last_seen_state.insert(*pos).unwrap();
+                }
+            }
+        })
     }
 }
