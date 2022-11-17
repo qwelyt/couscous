@@ -1,35 +1,46 @@
 #![no_std]
 #![no_main]
 
+
 #[allow(unused, unused_variables, unused_mut)]
 use panic_halt as _;
+
+mod rp2040_monotonic;
 
 #[rtic::app(device = seeeduino_xiao_rp2040::pac, dispatchers = [SPI0_IRQ])]
 mod app {
     use core::fmt;
     use core::fmt::Write;
-    use core::iter::once;
 
     use cortex_m::asm::delay;
     use embedded_hal::digital::v2::{InputPin, OutputPin};
-    use embedded_hal::prelude::_embedded_hal_blocking_spi_Write;
     use hash32::{BuildHasherDefault, FnvHasher};
-    use heapless::{FnvIndexSet, IndexSet, Vec};
-    use rp2040_hal::{Clock, gpio::DynPin, pac, pio::PIOExt, Sio, Timer};
-    use rp2040_hal::gpio::{DynPinId, DynPinMode, PinId, PinMode};
-    use rp2040_hal::pio::{SM0, StateMachine, StateMachineIndex, ValidStateMachine};
-    use rp2040_hal::timer::CountDown;
-    use rp2040_monotonic::{ExtU64, Rp2040Monotonic};
-    use seeeduino_xiao_rp2040::entry;
-    use seeeduino_xiao_rp2040::hal;
-    use seeeduino_xiao_rp2040::pac::PIO0;
-    use smart_leds::{brightness, RGB8, SmartLedsWrite};
+    use heapless::{FnvIndexSet, IndexSet};
+    // use rp2040_hal::pac::PIO0;
+    // use rp2040_hal::{Clock, gpio::DynPin, pac, pio::PIOExt, Sio, Timer};
+    // use rp2040_hal::gpio::{DynPinId, DynPinMode, PinId, PinMode};
+    // use rp2040_hal::pio::{SM0, StateMachine, StateMachineIndex, ValidStateMachine};
+    // use rp2040_hal::timer::CountDown;
+    // use rp2040_monotonic::{ExtU64, Rp2040Monotonic};
+    // use systick_monotonic::{ExtU64, Systick};
+    use seeeduino_xiao_rp2040::{
+        hal::{
+            self,
+            gpio::DynPin,
+            Sio,
+        },
+    };
+    // use smart_leds::{brightness, RGB8,};
     // USB Device support
     use usb_device::{class_prelude::*, prelude::*};
     use usbd_hid::descriptor::KeyboardReport;
     use usbd_hid::hid_class::HIDClass;
     use usbd_serial::SerialPort;
-    use ws2812_pio::{Ws2812, Ws2812Direct};
+
+    // use ws2812_pio::{Ws2812, Ws2812Direct};
+    use crate::rp2040_monotonic::{ExtU64, Rp2040Monotonic};
+
+// use core::iter::once;
 
     const REPORT_ID: u8 = 0x01;
 
@@ -62,7 +73,7 @@ mod app {
     struct Local {
         rows: [DynPin; 5],
         cols: [DynPin; 6],
-        neo: Ws2812Direct<PIO0, SM0, hal::gpio::bank0::Gpio12>,
+        // neo: Ws2812Direct<PIO0, SM0, gpio::bank0::Gpio12>,
     }
 
     #[monotonic(binds = TIMER_IRQ_0, default = true)]
@@ -94,17 +105,17 @@ mod app {
             sio.gpio_bank0,
             &mut pac.RESETS,
         );
-        let (mut pio, sm0, _, _, _) = pac.PIO0.split(&mut pac.RESETS);
-        let mut ws = Ws2812Direct::new(
-            pins.neopixel_data.into_mode(),
-            &mut pio,
-            sm0,
-            clocks.peripheral_clock.freq(),
-        );
-        let mut neopower = pins.neopixel_power.into_push_pull_output();
-        neopower.set_high().unwrap();
-        let mono = rp2040_monotonic::Rp2040Monotonic::new(pac.TIMER);
-        ws.write(brightness(once(wheel(20)), 32)).unwrap();
+        // let (mut pio, sm0, _, _, _) = pac.PIO0.split(&mut pac.RESETS);
+        // let mut ws = Ws2812Direct::new(
+        //     pins.neopixel_data.into_mode(),
+        //     &mut pio,
+        //     sm0,
+        //     clocks.peripheral_clock.freq(),
+        // );
+        // let mut neopower = pins.neopixel_power.into_push_pull_output();
+        // neopower.set_high().unwrap();
+        let mono = Rp2040Monotonic::new(pac.TIMER);
+        // ws.write(brightness(once(wheel(20)), 32)).unwrap();
 
         // Set up the USB driver
         // We do this last in the init function so that we can enable interrupts as soon as
@@ -179,7 +190,7 @@ mod app {
             Local {
                 rows: [pins.a0.into(), pins.a1.into(), pins.a2.into(), pins.a3.into(), pins.sda.into()],
                 cols: [pins.scl.into(), pins.tx.into(), pins.mosi.into(), pins.miso.into(), pins.sck.into(), pins.rx.into()],
-                neo: ws,
+                // neo: ws,
             },
             init::Monotonics(mono)
         )
@@ -205,7 +216,7 @@ mod app {
         check_state::spawn().ok();
     }
 
-    #[task(local = [neo, wheel_pos: u8 = 1], shared = [current_state, last_state])]
+    #[task(local = [wheel_pos: u8 = 1], shared = [current_state, last_state])]
     fn check_state(mut cx: check_state::Context) {
         let current_state = cx.shared.current_state;
         let last_state = cx.shared.last_state;
@@ -215,7 +226,7 @@ mod app {
                 // Nothing has changed
             } else {
                 // send_new_report();
-                cx.local.neo.write(brightness(once(wheel(*cx.local.wheel_pos)), 32)).unwrap();
+                // cx.local.neo.write(brightness(once(wheel(*cx.local.wheel_pos)), 32)).unwrap();
                 *cx.local.wheel_pos = *cx.local.wheel_pos + 10 % 255;
                 last_state.clear();
                 for pos in current_state.iter() {
@@ -252,21 +263,21 @@ mod app {
         pressed
     }
 
-    fn wheel(mut wheel_pos: u8) -> RGB8 {
-        wheel_pos = 255 - wheel_pos;
-        if wheel_pos < 85 {
-            // No green in this sector - red and blue only
-            (255 - (wheel_pos * 3), 0, wheel_pos * 3).into()
-        } else if wheel_pos < 170 {
-            // No red in this sector - green and blue only
-            wheel_pos -= 85;
-            (0, wheel_pos * 3, 255 - (wheel_pos * 3)).into()
-        } else {
-            // No blue in this sector - red and green only
-            wheel_pos -= 170;
-            (wheel_pos * 3, 255 - (wheel_pos * 3), 0).into()
-        }
-    }
+    // fn wheel(mut wheel_pos: u8) -> RGB8 {
+    //     wheel_pos = 255 - wheel_pos;
+    //     if wheel_pos < 85 {
+    //         // No green in this sector - red and blue only
+    //         (255 - (wheel_pos * 3), 0, wheel_pos * 3).into()
+    //     } else if wheel_pos < 170 {
+    //         // No red in this sector - green and blue only
+    //         wheel_pos -= 85;
+    //         (0, wheel_pos * 3, 255 - (wheel_pos * 3)).into()
+    //     } else {
+    //         // No blue in this sector - red and green only
+    //         wheel_pos -= 170;
+    //         (wheel_pos * 3, 255 - (wheel_pos * 3), 0).into()
+    //     }
+    // }
 
     /// This task is reponsible for polling for USB events
     /// whenever the USBCTRL_IRQ is raised
