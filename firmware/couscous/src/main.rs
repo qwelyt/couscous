@@ -4,10 +4,9 @@
 #[allow(unused, unused_variables, unused_mut)]
 use panic_halt as _;
 
-#[rtic::app(device = seeeduino_xiao_rp2040::pac, dispatchers = [SPI0_IRQ, TIMER_IRQ_1])]
+#[rtic::app(device = seeeduino_xiao_rp2040::pac, peripherals = true, dispatchers = [SPI0_IRQ, TIMER_IRQ_1])]
 mod app {
     use core::fmt::{self, Write};
-    use core::hash::Hasher;
     use core::iter::once;
 
     use bsp::{
@@ -207,7 +206,7 @@ mod app {
         let mono = Rp2040Monotonic::new(pac.TIMER);
         let now = monotonics::now();
         let next = now + 500.millis();
-        // write_keyboard::spawn_at(next, next).unwrap();
+        runner::spawn_at(next, next).unwrap();
 
         (
             Shared {
@@ -231,7 +230,18 @@ mod app {
     }
 
     #[task(
-    priority = 1,
+    priority = 1
+    )]
+    fn runner(cx: runner::Context, scheduled: Instant) {
+        scan::spawn().unwrap();
+        check_state::spawn().unwrap();
+        write_keyboard::spawn().unwrap();
+        let next = scheduled + 50.millis();
+        runner::spawn_at(next, next).unwrap();
+    }
+
+    #[task(
+    priority = 2,
     local = [rows, cols],
     shared = [current_state]
     )]
@@ -254,8 +264,8 @@ mod app {
     }
 
     #[task(
-    priority = 1,
-    local = [wheel_pos: u8 = 1, red, blue],
+    priority = 2,
+    local = [wheel_pos: u8 = 1],
     shared = [current_state, last_state])
     ]
     fn check_state(cx: check_state::Context) {
@@ -264,17 +274,8 @@ mod app {
 
         (current_state, last_state).lock(|current_state, last_state| {
             if *(&last_state.eq(&current_state)) {
-                // Nothing has changed
-                // cx.local.red.set_low().unwrap();
-                // cx.local.green.set_low().unwrap();
-                // cx.local.blue.set_low().unwrap();
             } else {
-                // send_new_report();
-                // cx.local.neo.write(brightness(once(wheel(*cx.local.wheel_pos)), 32)).unwrap();
                 *cx.local.wheel_pos = *cx.local.wheel_pos + 10 % 255;
-                // cx.local.red.set_high().unwrap();
-                // cx.local.green.set_high().unwrap();
-                // cx.local.blue.set_high().unwrap();
                 last_state.clear();
                 for pos in current_state.iter() {
                     last_state.insert(*pos).unwrap();
@@ -332,6 +333,8 @@ mod app {
                         }
                         if bytes == b"c" {
                             write!(debug_port, "Do spawn\r\n").unwrap();
+                            scan::spawn().unwrap();
+                            check_state::spawn().unwrap();
                             write_keyboard::spawn().unwrap();
                             write!(debug_port, "Done spawn\r\n").unwrap();
                         }
@@ -343,128 +346,55 @@ mod app {
     #[task(
     priority = 2,
     shared = [debug_port, hid_device, last_state],
+    local = [keycode: bool = true]
     )]
     fn write_keyboard(mut cx: write_keyboard::Context) {
-        let _ = cx
-            .shared
-            .debug_port
-            .lock(|dp| write!(dp, "in write_keyboard\r\n"));
+        // let _ = cx
+        //     .shared
+        //     .debug_port
+        //     .lock(|dp| write!(dp, "in write_keyboard\r\n"));
         (cx.shared.hid_device, cx.shared.last_state)
             .lock(|hid, last_state| {
                 // .lock(|hid: HIDClass<_>, neo: Ws2812Direct<_, _, _>, last_state: FnvIndexSet<_, 64>| {
-                let mut report = KeyboardReport {
-                    modifier: 0,
-                    reserved: 0,
-                    leds: 0,
-                    keycodes: [0x04, 0, 0, 0, 0, 0],
-                };
-                report.keycodes = [0x04, 0, 0, 0, 0, 0];
-                if let Err(e) = hid.push_input(&report) {
-                    // *cx.local.wheel_pos = 255;
-                    let _ = cx
-                        .shared
-                        .debug_port
-                        .lock(|dp| write!(dp, "got error when pushing hid: {e:?}\r\n"));
-                }
+                let _ = cx
+                    .shared
+                    .debug_port
+                    .lock(|dp| write!(dp, "Pressed: {last_state:?}\r\n"));
+                // let mut report = KeyboardReport {
+                //     modifier: 0,
+                //     reserved: 0,
+                //     leds: 0,
+                //     keycodes: [0, 0, 0, 0, 0, 0],
+                // };
+                // if last_state.is_empty() {
+                //     if let Err(e) = hid.push_input(&report) {
+                //         // *cx.local.wheel_pos = 255;
+                //         let _ = cx
+                //             .shared
+                //             .debug_port
+                //             .lock(|dp| write!(dp, "got error when pushing hid: {e:?}\r\n"));
+                //     }
+                // } else {
+                //     report.keycodes[0] = 0x0A;
+                //     if let Err(e) = hid.push_input(&report) {
+                //         // *cx.local.wheel_pos = 255;
+                //         let _ = cx
+                //             .shared
+                //             .debug_port
+                //             .lock(|dp| write!(dp, "got error when pushing hid: {e:?}\r\n"));
+                //     }
+                // }
+
                 // neo.write(brightness(once(wheel(*cx.local.wheel_pos)), 32)).unwrap();
             });
     }
 
-    // #[task(
-    // shared = [debug_port, hid_device, neo, neo_power, last_state],
-    // local = [
-    // report: [u8; 8] = [0, 0, 0, 0, 0, 0, 0, 0],
-    // wheel_pos: u8 = 1,
-    // green
-    // ]
-    // )]
-    // fn write_keyboard(mut cx: write_keyboard::Context, scheduled: Instant) {
-    //     let _ = cx
-    //         .shared
-    //         .debug_port
-    //         .lock(|dp| write!(dp, "in write_keyboard"));
-    //     // cx.local.green.set_low().unwrap();
-    //     // let mut next = scheduled + 50.millis();
-    //     // (cx.shared.hid_device, cx.shared.neo, cx.shared.neo_power, cx.shared.last_state)
-    //     //     .lock(|hid, neo, neo_power, last_state| {
-    //     //         // .lock(|hid: HIDClass<_>, neo: Ws2812Direct<_, _, _>, last_state: FnvIndexSet<_, 64>| {
-    //     //         let mut report = KeyboardReport {
-    //     //             modifier: 0,
-    //     //             reserved: 0,
-    //     //             leds: 0,
-    //     //             keycodes: [0x04, 0, 0, 0, 0, 0],
-    //     //         };
-    //     //         // report.keycodes = [0x04, 0, 0, 0, 0, 0];
-    //     //         let slice = 100 / 8;
-    //     //         *cx.local.wheel_pos = *cx.local.wheel_pos + 10 % 255;
-    //     //         // match hid.push_input(&report) {
-    //     //         //     Ok(_) => *cx.local.wheel_pos = 200,
-    //     //         //     Err(UsbError::InvalidState) => {
-    //     //         //         *cx.local.wheel_pos = slice * 1;
-    //     //         //     }
-    //     //         //     Err(UsbError::WouldBlock) => {
-    //     //         //         *cx.local.wheel_pos = slice * 2;
-    //     //         //     }
-    //     //         //     Err(UsbError::ParseError) => {
-    //     //         //         *cx.local.wheel_pos = slice * 3;
-    //     //         //     }
-    //     //         //     Err(UsbError::BufferOverflow) => {
-    //     //         //         *cx.local.wheel_pos = slice * 4;
-    //     //         //     }
-    //     //         //     Err(UsbError::EndpointOverflow) => *cx.local.wheel_pos = slice * 5,
-    //     //         //     Err(UsbError::EndpointMemoryOverflow) => *cx.local.wheel_pos = slice * 6,
-    //     //         //     Err(UsbError::InvalidEndpoint) => *cx.local.wheel_pos = slice * 7,
-    //     //         //     Err(UsbError::Unsupported) => *cx.local.wheel_pos = slice * 8,
-    //     //         // }
-    //     //         // next = scheduled + 1000.millis();
-    //     //         // if let Err(e) = hid.push_input(&report) {
-    //     //         //     *cx.local.wheel_pos = 255;
-    //     //         //     let _ = cx
-    //     //         //         .shared
-    //     //         //         .debug_port
-    //     //         //         .lock(|dp| write!(dp, "got error when pushing hid: {e:?}\r\n"));
-    //     //         // }
-    //     //         neo.write(brightness(once(wheel(*cx.local.wheel_pos)), 32)).unwrap();
-    //     //     });
-    //     //
-    //     // let _ = cx
-    //     //     .shared
-    //     //     .debug_port
-    //     //     .lock(|dp| write!(dp, "in write_keyboard -- done"));
-    //     // write_keyboard::spawn_at(next, next).unwrap();
-    // }
 
-    // #[task(
-    // binds = PIO0_IRQ_0,
-    // shared = [debug_port, hid_device, neo],
-    // local = [
-    // report: [u8; 8] = [0, 0, 0, 0, 0, 0, 0, 0],
-    // wheel_pos: u8 = 1
-    // ])]
-    // fn pio0_irq_0(mut cx: pio0_irq_0::Context) {
-    //     // use byteorder::{BigEndian, ByteOrder};
-    //     // while let Some(pio_report) = cx.local.rx.read() {
-    //     //     BigEndian::write_u32(&mut cx.local.report[1..], !pio_report);
-    //     //     cx.local.report[3] &= 0xfe;
-    //     //     cx.local.report[4] = 0;
-    //     //     // FIXME: error handling when pushing reports
-    //     //     cx.shared.hid_device.lock(|hid| {
-    //     //         if let Err(e) = hid.push_raw_input(cx.local.report) {
-    //     //             let _ = cx
-    //     //                 .shared
-    //     //                 .debug_port
-    //     //                 .lock(|dp| write!(dp, "got error when pushing hid: {e:?}\r\n"));
-    //     //         }
-    //     //     });
-    //     // }
-    // }
 
     #[idle]
     fn idle(_cx: idle::Context) -> ! {
         loop {
-            // cortex_m::asm::wfi();
-            // scan::spawn().unwrap();
-            // check_state::spawn().unwrap();
+            cortex_m::asm::wfi();
         }
     }
 
