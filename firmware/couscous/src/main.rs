@@ -29,6 +29,7 @@ mod app {
     // USB Device support
     use usb_device::{class_prelude::*, prelude::*};
     use usbd_hid::descriptor::KeyboardReport;
+    use usbd_hid::descriptor::SerializedDescriptor;
     use usbd_hid::hid_class::{HIDClass, HidClassSettings, HidCountryCode, HidProtocol, HidSubClass, ProtocolModeConfig};
     use usbd_serial::SerialPort;
     use ws2812_pio::Ws2812Direct;
@@ -182,10 +183,10 @@ mod app {
         hid_settings.protocol = HidProtocol::Keyboard;
         hid_settings.subclass = HidSubClass::Boot;
         hid_settings.config = ProtocolModeConfig::ForceBoot;
-        hid_settings.locale = HidCountryCode::Swedish;
+        // hid_settings.locale = HidCountryCode::Swedish;
         let hid_device = HIDClass::new_with_settings(
             usb_bus,
-            DESCRIPTOR,
+            KeyboardReport::desc(),
             200,
             hid_settings,
         );
@@ -205,7 +206,8 @@ mod app {
 
         let mono = Rp2040Monotonic::new(pac.TIMER);
         let now = monotonics::now();
-        write_keyboard::spawn(now).unwrap();
+        let next = now + 500.millis();
+        write_keyboard::spawn_at(next, next).unwrap();
 
         (
             Shared {
@@ -317,6 +319,10 @@ mod app {
                         if bytes == b"b" {
                             hal::rom_data::reset_to_usb_boot(0, 0);
                         }
+                        if bytes == b"a" {
+                            write!(debug_port, "Yes hello\r\n").unwrap();
+                            write_keyboard::spawn(monotonics::now()).unwrap();
+                        }
                     }
                 }
             });
@@ -340,41 +346,38 @@ mod app {
                     modifier: 0,
                     reserved: 0,
                     leds: 0,
-                    keycodes: [0, 0, 0, 0, 0, 0],
+                    keycodes: [0x04, 0, 0, 0, 0, 0],
                 };
-                if last_state.is_empty() {} else {
-                    report.keycodes = [0x04, 0, 0, 0, 0, 0];
-                }
+                // report.keycodes = [0x04, 0, 0, 0, 0, 0];
                 let slice = 100 / 8;
                 *cx.local.wheel_pos = *cx.local.wheel_pos + 1 % 255;
-                match hid.push_input(&report) {
-                    Ok(_) => *cx.local.wheel_pos = 200,
-                    Err(UsbError::InvalidState) => {
-                        *cx.local.wheel_pos = slice * 1;
-                    }
-                    Err(UsbError::WouldBlock) => {
-                        *cx.local.wheel_pos = slice * 2;
-                    }
-                    Err(UsbError::ParseError) => {
-                        *cx.local.wheel_pos = slice * 3;
-                    }
-                    Err(UsbError::BufferOverflow) => {
-                        *cx.local.wheel_pos = slice * 4;
-                    }
-                    Err(UsbError::EndpointOverflow) => *cx.local.wheel_pos = slice * 5,
-                    Err(UsbError::EndpointMemoryOverflow) => *cx.local.wheel_pos = slice * 6,
-                    Err(UsbError::InvalidEndpoint) => *cx.local.wheel_pos = slice * 7,
-                    Err(UsbError::Unsupported) => *cx.local.wheel_pos = slice * 8,
-                }
-                // next = scheduled + 1000.millis();
-                // if let Err(e) = hid.push_input(report) {
-                //     *cx.local.wheel_pos = 255;
-                //     next = scheduled + 1000.millis();
-                //     let _ = cx
-                //         .shared
-                //         .debug_port
-                //         .lock(|dp| write!(dp, "got error when pushing hid: {e:?}\r\n"));
+                // match hid.push_input(&report) {
+                //     Ok(_) => *cx.local.wheel_pos = 200,
+                //     Err(UsbError::InvalidState) => {
+                //         *cx.local.wheel_pos = slice * 1;
+                //     }
+                //     Err(UsbError::WouldBlock) => {
+                //         *cx.local.wheel_pos = slice * 2;
+                //     }
+                //     Err(UsbError::ParseError) => {
+                //         *cx.local.wheel_pos = slice * 3;
+                //     }
+                //     Err(UsbError::BufferOverflow) => {
+                //         *cx.local.wheel_pos = slice * 4;
+                //     }
+                //     Err(UsbError::EndpointOverflow) => *cx.local.wheel_pos = slice * 5,
+                //     Err(UsbError::EndpointMemoryOverflow) => *cx.local.wheel_pos = slice * 6,
+                //     Err(UsbError::InvalidEndpoint) => *cx.local.wheel_pos = slice * 7,
+                //     Err(UsbError::Unsupported) => *cx.local.wheel_pos = slice * 8,
                 // }
+                // next = scheduled + 1000.millis();
+                if let Err(e) = hid.push_input(&report) {
+                    *cx.local.wheel_pos = 255;
+                    let _ = cx
+                        .shared
+                        .debug_port
+                        .lock(|dp| write!(dp, "got error when pushing hid: {e:?}\r\n"));
+                }
                 neo.write(brightness(once(wheel(*cx.local.wheel_pos)), 32)).unwrap();
             });
 
