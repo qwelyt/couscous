@@ -33,43 +33,6 @@ mod app {
     use usbd_serial::SerialPort;
     use ws2812_pio::Ws2812Direct;
 
-    const REPORT_ID: u8 = 0x02;
-    const DESCRIPTOR: &[u8] = &[
-        0x05, 0x01,         // Usage Page (Generic Desktop),
-        0x09, 0x06,         // Usage (Keyboard),
-        0xA1, 0x01,         // Collection (Application),
-        0x85, REPORT_ID,    //     REPORT_ID
-        0x75, 0x01,         //     Report Size (1),
-        0x95, 0x08,         //     Report Count (8),
-        0x05, 0x07,         //     Usage Page (Key Codes),
-        0x19, 0xE0,         //     Usage Minimum (224),
-        0x29, 0xE7,         //     Usage Maximum (231),
-        0x15, 0x00,         //     Logical Minimum (0),
-        0x25, 0x01,         //     Logical Maximum (1),
-        0x81, 0x02,         //     Input (Data, Variable, Absolute), ;Modifier byte
-        0x95, 0x01,         //     Report Count (1),
-        0x75, 0x08,         //     Report Size (8),
-        0x81, 0x01,         //     Input (Constant), ;Reserved byte
-        0x95, 0x05,         //     Report Count (5),
-        0x75, 0x01,         //     Report Size (1),
-        0x05, 0x08,         //     Usage Page (LEDs),
-        0x19, 0x01,         //     Usage Minimum (1),
-        0x29, 0x05,         //     Usage Maximum (5),
-        0x91, 0x02,         //     Output (Data, Variable, Absolute), ;LED report
-        0x95, 0x01,         //     Report Count (1),
-        0x75, 0x03,         //     Report Size (3),
-        0x91, 0x01,         //     Output (Constant), ;LED report padding
-        0x95, 0x06,         //     Report Count (6),
-        0x75, 0x08,         //     Report Size (8),
-        0x15, 0x00,         //     Logical Minimum (0),
-        0x26, 0xFF, 0x00,   //     Logical Maximum(255),
-        0x05, 0x07,         //     Usage Page (Key Codes),
-        0x19, 0x00,         //     Usage Minimum (0),
-        0x2A, 0xFF, 0x00,   //     Usage Maximum (255),
-        0x81, 0x00,         //     Input (Data, Array),
-        0xC0,               // End Collection
-    ];
-
     #[monotonic(binds = TIMER_IRQ_0, default = true)]
     type AppMonotonic = Rp2040Monotonic;
     type Instant = <Rp2040Monotonic as rtic::Monotonic>::Instant;
@@ -87,8 +50,6 @@ mod app {
 
     #[shared]
     struct Shared {
-        current_state: IndexSet<(u8, u8, bool), BuildHasherDefault<FnvHasher>, 64>,
-        last_state: IndexSet<(u8, u8, bool), BuildHasherDefault<FnvHasher>, 64>,
         usb_device: UsbDevice<'static, hal::usb::UsbBus>,
         debug_port: DebugPort<'static>,
         hid_device: HIDClass<'static, hal::usb::UsbBus>,
@@ -100,9 +61,8 @@ mod app {
     struct Local {
         rows: [DynPin; 5],
         cols: [DynPin; 6],
-        blue: DynPin,
-        red: DynPin,
-        green: DynPin,
+        current_state: IndexSet<(u8, u8, bool), BuildHasherDefault<FnvHasher>, 64>,
+        last_state: IndexSet<(u8, u8, bool), BuildHasherDefault<FnvHasher>, 64>,
     }
 
     #[init(local = [
@@ -210,8 +170,6 @@ mod app {
 
         (
             Shared {
-                current_state: FnvIndexSet::new(),
-                last_state: FnvIndexSet::new(),
                 usb_device,
                 debug_port,
                 hid_device,
@@ -221,67 +179,72 @@ mod app {
             Local {
                 rows: [pins.a0.into(), pins.a1.into(), pins.a2.into(), pins.a3.into(), pins.sda.into()],
                 cols: [pins.scl.into(), pins.tx.into(), pins.mosi.into(), pins.miso.into(), pins.sck.into(), pins.rx.into()],
-                blue,
-                red,
-                green,
+                current_state: FnvIndexSet::new(),
+                last_state: FnvIndexSet::new(),
             },
             init::Monotonics(mono),
         )
     }
 
     #[task(
-    priority = 1
+    priority = 2,
+    local = [rows, cols, last_state, current_state, wheel_pos: u8 = 1],
+    shared = [hid_device, debug_port, neo]
     )]
-    fn runner(cx: runner::Context, scheduled: Instant) {
-        scan::spawn().unwrap();
-        check_state::spawn().unwrap();
-        write_keyboard::spawn().unwrap();
+    fn runner(mut cx: runner::Context, scheduled: Instant) {
+        let _ = cx
+            .shared
+            .neo
+            .lock(|ws| ws.write(brightness(once(wheel(*cx.local.wheel_pos)), 32)).unwrap());
+        *cx.local.wheel_pos = *cx.local.wheel_pos + 5 % 255;
+        // let _ = cx
+        //     .shared
+        //     .debug_port
+        //     .lock(|dp| write!(dp, "Hello from runner\r\n"));
+        let rows = cx.local.rows;
+        let cols = cx.local.cols;
+        let last_state = cx.local.last_state;
+        let state: IndexSet<(u8, u8, bool), BuildHasherDefault<FnvHasher>, 64> = scan(rows, cols);
+        // let _ = cx
+        //     .shared
+        //     .debug_port
+        //     .lock(|dp| write!(dp, "Current state {state:?}\r\n"));
+        if !(state.eq(last_state)) {
+            // let _ = cx
+            //     .shared
+            //     .debug_port
+            //     .lock(|dp| write!(dp, "Pressed: {last_state:?}\r\n"));
+            (cx.shared.hid_device, cx.shared.debug_port)
+                .lock(|hid, debug| {
+                    write!(debug, "State was changed: {state:?}\r\n").unwrap();
+                    write_keyboard(hid, debug, &state);
+                });
+            last_state.clear();
+            for pos in state.iter() {
+                last_state.insert(*pos).unwrap();
+            }
+        } else {
+            // let _ = cx
+            //     .shared
+            //     .debug_port
+            //     .lock(|dp| write!(dp, "Nothing changed\r\n"));
+        }
         let next = scheduled + 50.millis();
         runner::spawn_at(next, next).unwrap();
     }
 
-    #[task(
-    priority = 2,
-    local = [rows, cols],
-    shared = [current_state]
-    )]
-    fn scan(mut cx: scan::Context) {
-        let rows = cx.local.rows;
-        let cols = cx.local.cols;
-
+    fn scan(rows: &mut [DynPin; 5], cols: &mut [DynPin; 6]) -> IndexSet<(u8, u8, bool), BuildHasherDefault<FnvHasher>, 64> {
         let scan1 = scan_matrix(rows, cols);
         // Debounce
         delay(20);
         let scan2 = scan_matrix(rows, cols);
 
-        cx.shared.current_state.lock(|current_state| {
-            current_state.clear();
-            let x: IndexSet<&(u8, u8, bool), BuildHasherDefault<FnvHasher>, 64> = scan1.intersection(&scan2).collect();
-            for pos in x.iter() {
-                current_state.insert(**pos).unwrap();
-            }
-        });
-    }
-
-    #[task(
-    priority = 2,
-    local = [wheel_pos: u8 = 1],
-    shared = [current_state, last_state])
-    ]
-    fn check_state(cx: check_state::Context) {
-        let current_state = cx.shared.current_state;
-        let last_state = cx.shared.last_state;
-
-        (current_state, last_state).lock(|current_state, last_state| {
-            if *(&last_state.eq(&current_state)) {
-            } else {
-                *cx.local.wheel_pos = *cx.local.wheel_pos + 10 % 255;
-                last_state.clear();
-                for pos in current_state.iter() {
-                    last_state.insert(*pos).unwrap();
-                }
-            }
-        });
+        let mut state: IndexSet<(u8, u8, bool), BuildHasherDefault<FnvHasher>, 64> = FnvIndexSet::new();
+        let x: IndexSet<&(u8, u8, bool), BuildHasherDefault<FnvHasher>, 64> = scan1.intersection(&scan2).collect();
+        for pos in x.iter() {
+            state.insert(**pos).unwrap();
+        }
+        state
     }
 
     fn scan_matrix(rows: &mut [DynPin; 5], cols: &mut [DynPin; 6]) -> IndexSet<(u8, u8, bool), BuildHasherDefault<FnvHasher>, 64> {
@@ -333,9 +296,7 @@ mod app {
                         }
                         if bytes == b"c" {
                             write!(debug_port, "Do spawn\r\n").unwrap();
-                            scan::spawn().unwrap();
-                            check_state::spawn().unwrap();
-                            write_keyboard::spawn().unwrap();
+                            runner::spawn(monotonics::now()).unwrap();
                             write!(debug_port, "Done spawn\r\n").unwrap();
                         }
                     }
@@ -343,52 +304,67 @@ mod app {
             });
     }
 
-    #[task(
-    priority = 2,
-    shared = [debug_port, hid_device, last_state],
-    local = [keycode: bool = true]
-    )]
-    fn write_keyboard(mut cx: write_keyboard::Context) {
-        // let _ = cx
-        //     .shared
-        //     .debug_port
-        //     .lock(|dp| write!(dp, "in write_keyboard\r\n"));
-        (cx.shared.hid_device, cx.shared.last_state)
-            .lock(|hid, last_state| {
-                // .lock(|hid: HIDClass<_>, neo: Ws2812Direct<_, _, _>, last_state: FnvIndexSet<_, 64>| {
-                let _ = cx
-                    .shared
-                    .debug_port
-                    .lock(|dp| write!(dp, "Pressed: {last_state:?}\r\n"));
-                // let mut report = KeyboardReport {
-                //     modifier: 0,
-                //     reserved: 0,
-                //     leds: 0,
-                //     keycodes: [0, 0, 0, 0, 0, 0],
-                // };
-                // if last_state.is_empty() {
-                //     if let Err(e) = hid.push_input(&report) {
-                //         // *cx.local.wheel_pos = 255;
-                //         let _ = cx
-                //             .shared
-                //             .debug_port
-                //             .lock(|dp| write!(dp, "got error when pushing hid: {e:?}\r\n"));
-                //     }
-                // } else {
-                //     report.keycodes[0] = 0x0A;
-                //     if let Err(e) = hid.push_input(&report) {
-                //         // *cx.local.wheel_pos = 255;
-                //         let _ = cx
-                //             .shared
-                //             .debug_port
-                //             .lock(|dp| write!(dp, "got error when pushing hid: {e:?}\r\n"));
-                //     }
-                // }
+    fn write_keyboard(hid: &mut HIDClass<'static, hal::usb::UsbBus>, debug: &mut DebugPort<'static>, state: &IndexSet<(u8, u8, bool), BuildHasherDefault<FnvHasher>, 64>) {
+        let mut report = KeyboardReport {
+            modifier: 0,
+            reserved: 0,
+            leds: 0,
+            keycodes: [0, 0, 0, 0, 0, 0],
+        };
+        let a: u8 = 1;
+        let b: u8 = 1;
+        let key = (a, b, false);
+        if state.contains(&key) {
+            report.keycodes[1] = 0x0A;
+        }
+        if let Err(e) = hid.push_input(&report) {
+            // *cx.local.wheel_pos = 255;
+            let _ = write!(debug, "got error when pushing hid: {e:?}\r\n");
+            // let _ = cx
+            //     .shared
+            //     .debug_port
+            //     .lock(|dp| write!(dp, "got error when pushing hid: {e:?}\r\n"));
+        }
 
-                // neo.write(brightness(once(wheel(*cx.local.wheel_pos)), 32)).unwrap();
-            });
+        // // let _ = cx
+        // //     .shared
+        // //     .debug_port
+        // //     .lock(|dp| write!(dp, "in write_keyboard\r\n"));
+        // (cx.shared.hid_device, cx.shared.last_state)
+        //     .lock(|hid, last_state| {
+        //         // .lock(|hid: HIDClass<_>, neo: Ws2812Direct<_, _, _>, last_state: FnvIndexSet<_, 64>| {
+        //         let _ = cx
+        //             .shared
+        //             .debug_port
+        //             .lock(|dp| write!(dp, "Pressed: {last_state:?}\r\n"));
+        //         // let mut report = KeyboardReport {
+        //         //     modifier: 0,
+        //         //     reserved: 0,
+        //         //     leds: 0,
+        //         //     keycodes: [0, 0, 0, 0, 0, 0],
+        //         // };
+        //         // if last_state.is_empty() {
+        //         //     if let Err(e) = hid.push_input(&report) {
+        //         //         // *cx.local.wheel_pos = 255;
+        //         //         let _ = cx
+        //         //             .shared
+        //         //             .debug_port
+        //         //             .lock(|dp| write!(dp, "got error when pushing hid: {e:?}\r\n"));
+        //         //     }
+        //         // } else {
+        //         //     report.keycodes[0] = 0x0A;
+        //         //     if let Err(e) = hid.push_input(&report) {
+        //         //         // *cx.local.wheel_pos = 255;
+        //         //         let _ = cx
+        //         //             .shared
+        //         //             .debug_port
+        //         //             .lock(|dp| write!(dp, "got error when pushing hid: {e:?}\r\n"));
+        //         //     }
+        //         // }
+        //
+        //         // neo.write(brightness(once(wheel(*cx.local.wheel_pos)), 32)).unwrap();
+        //     });
     }
-
 
 
     #[idle]
