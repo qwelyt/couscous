@@ -7,25 +7,32 @@ use panic_halt as _;
 #[rtic::app(device = seeeduino_xiao_rp2040::pac, dispatchers = [SPI0_IRQ])]
 mod app {
     use core::fmt::{self, Write};
+    use core::future::Future;
+    use core::hash::Hasher;
     use core::iter::once;
 
-    use bsp::hal::{
-        self,
-        clocks::Clock,
-        gpio::{FunctionPio0, Pin},
-        pio::{PinState, PIOExt},
+    use bsp::{
+        hal::{
+            self,
+            clocks::Clock,
+            gpio::DynPin,
+            pio::{PIOExt, SM0},
+        },
+        pac::PIO0,
     };
-    use embedded_hal::digital::v2::OutputPin;
+    use cortex_m::asm::delay;
+    use embedded_hal::digital::v2::{InputPin, OutputPin};
     use hash32::{BuildHasherDefault, FnvHasher};
-    use heapless::{FnvIndexSet, IndexSet, Vec};
-    use rp2040_hal::gpio::DynPin;
+    use heapless::{FnvIndexSet, IndexSet};
+    use rp2040_monotonic::{ExtU64, Rp2040Monotonic};
+    use rtic::mutex_prelude::{TupleExt02, TupleExt03};
     use seeeduino_xiao_rp2040 as bsp;
     use smart_leds::{brightness, RGB8, SmartLedsWrite};
     // USB Device support
     use usb_device::{class_prelude::*, prelude::*};
-    use usbd_hid::hid_class::HIDClass;
+    use usbd_hid::hid_class::{HIDClass, HidClassSettings, HidProtocol, HidSubClass};
     use usbd_serial::SerialPort;
-    use ws2812_pio::{Ws2812, Ws2812Direct};
+    use ws2812_pio::Ws2812Direct;
 
     const REPORT_ID: u8 = 0x02;
     const DESCRIPTOR: &[u8] = &[
@@ -64,6 +71,10 @@ mod app {
         0xC0,               // End Collection
     ];
 
+    #[monotonic(binds = TIMER_IRQ_0, default = true)]
+    type AppMonotonic = Rp2040Monotonic;
+    type Instant = <Rp2040Monotonic as rtic::Monotonic>::Instant;
+
     /// Wrapper around a usb-cdc SerialPort
     /// to be able to use the `write!()` macro with it
     pub struct DebugPort<'a>(SerialPort<'a, hal::usb::UsbBus>);
@@ -77,16 +88,21 @@ mod app {
 
     #[shared]
     struct Shared {
+        current_state: IndexSet<(u8, u8, bool), BuildHasherDefault<FnvHasher>, 64>,
+        last_state: IndexSet<(u8, u8, bool), BuildHasherDefault<FnvHasher>, 64>,
         usb_device: UsbDevice<'static, hal::usb::UsbBus>,
         debug_port: DebugPort<'static>,
         hid_device: HIDClass<'static, hal::usb::UsbBus>,
+        neo: Ws2812Direct<PIO0, SM0, bsp::hal::gpio::bank0::Gpio12>,
     }
 
     #[local]
     struct Local {
         rows: [DynPin; 5],
         cols: [DynPin; 6],
-        // neo: Ws2812Direct<PIO0, SM0, gpio::bank0::Gpio12>,
+        blue: DynPin,
+        red: DynPin,
+        green: DynPin,
     }
 
     #[init(local = [
@@ -126,6 +142,16 @@ mod app {
         );
 
         let (mut pio, sm0, _, _, _) = pac.PIO0.split(&mut pac.RESETS);
+        let mut ws = Ws2812Direct::new(
+            pins.neopixel_data.into_mode(),
+            &mut pio,
+            sm0,
+            clocks.peripheral_clock.freq(),
+        );
+        let mut neopower = pins.neopixel_power.into_push_pull_output();
+        neopower.set_high().unwrap();
+        ws.write(brightness(once(wheel(20)), 32)).unwrap();
+
         // we want to run the statemachine at 30MHz
         // since that's the max clock speed of the SRT400
         // shift registers
@@ -152,10 +178,21 @@ mod app {
         // Set up the USB Communications Class Device driver for debugging
         let debug_port = DebugPort(SerialPort::new(usb_bus));
 
-        let hid_device = HIDClass::new(
+        let mut hid_settings = HidClassSettings::default();
+        hid_settings.protocol = HidProtocol::Keyboard;
+        hid_settings.subclass = HidSubClass::Boot;
+        let hid_device = HIDClass::new_with_settings(
             usb_bus,
             DESCRIPTOR,
-            200);
+            200,
+            hid_settings,
+        );
+        let mut blue: DynPin = pins.led_blue.into_push_pull_output().into();
+        let mut red: DynPin = pins.led_red.into_push_pull_output().into();
+        let mut green: DynPin = pins.led_green.into_push_pull_output().into();
+        blue.set_low().unwrap();
+        red.set_low().unwrap();
+        green.set_low().unwrap();
 
         let usb_device = UsbDeviceBuilder::new(usb_bus, UsbVidPid(0x16c0, 0x27dd))
             .manufacturer("qwelyt")
@@ -164,18 +201,92 @@ mod app {
             .device_class(0)
             .build();
 
+        let mono = Rp2040Monotonic::new(pac.TIMER);
+        let now = monotonics::now();
+        write_keyboard::spawn(now).unwrap();
+
         (
             Shared {
+                current_state: FnvIndexSet::new(),
+                last_state: FnvIndexSet::new(),
                 usb_device,
                 debug_port,
                 hid_device,
+                neo: ws,
             },
             Local {
                 rows: [pins.a0.into(), pins.a1.into(), pins.a2.into(), pins.a3.into(), pins.sda.into()],
                 cols: [pins.scl.into(), pins.tx.into(), pins.mosi.into(), pins.miso.into(), pins.sck.into(), pins.rx.into()],
+                blue,
+                red,
+                green,
             },
-            init::Monotonics(),
+            init::Monotonics(mono),
         )
+    }
+
+    #[task(local = [rows, cols], shared = [current_state])]
+    fn scan(mut cx: scan::Context) {
+        let rows = cx.local.rows;
+        let cols = cx.local.cols;
+
+        let scan1 = scan_matrix(rows, cols);
+        // Debounce
+        delay(20);
+        let scan2 = scan_matrix(rows, cols);
+
+        cx.shared.current_state.lock(|current_state| {
+            current_state.clear();
+            let x: IndexSet<&(u8, u8, bool), BuildHasherDefault<FnvHasher>, 64> = scan1.intersection(&scan2).collect();
+            for pos in x.iter() {
+                current_state.insert(**pos).unwrap();
+            }
+        });
+    }
+
+    #[task(local = [wheel_pos: u8 = 1], shared = [current_state, last_state])]
+    fn check_state(cx: check_state::Context) {
+        let current_state = cx.shared.current_state;
+        let last_state = cx.shared.last_state;
+
+        (current_state, last_state).lock(|current_state, last_state| {
+            if *(&last_state.eq(&current_state)) {
+                // Nothing has changed
+            } else {
+                // send_new_report();
+                // cx.local.neo.write(brightness(once(wheel(*cx.local.wheel_pos)), 32)).unwrap();
+                *cx.local.wheel_pos = *cx.local.wheel_pos + 10 % 255;
+                last_state.clear();
+                for pos in current_state.iter() {
+                    last_state.insert(*pos).unwrap();
+                }
+            }
+        });
+    }
+
+    fn scan_matrix(rows: &mut [DynPin; 5], cols: &mut [DynPin; 6]) -> IndexSet<(u8, u8, bool), BuildHasherDefault<FnvHasher>, 64> {
+        let mut pressed = FnvIndexSet::<(u8, u8, bool), 64>::new();
+        for (r, row) in rows.iter_mut().enumerate() {
+            row.into_push_pull_output();
+            row.set_high().unwrap();
+            for (c, col) in cols.iter_mut().enumerate() {
+                col.into_pull_down_input();
+                if col.is_high().unwrap() {
+                    pressed.insert((u8::try_from(r).unwrap(), u8::try_from(c).unwrap(), false)).unwrap();
+                }
+            }
+            row.set_low().unwrap();
+            row.into_pull_down_input();
+            for (c, col) in cols.iter_mut().enumerate() {
+                col.into_push_pull_output();
+                col.set_high().unwrap();
+                if row.is_high().unwrap() {
+                    pressed.insert((u8::try_from(r).unwrap(), u8::try_from(c).unwrap(), true)).unwrap();
+                }
+                col.set_low().unwrap();
+            }
+        }
+        pressed
     }
 
     /// This task is reponsible for polling for USB events
@@ -202,21 +313,46 @@ mod app {
             });
     }
 
-    /// This task is reponsible for reading data from the rx fifo
-    /// of pio0, and sending HID reports to the connected computer
-    #[task(binds = PIO0_IRQ_0, shared = [debug_port, hid_device], local = [
-    rows, cols,
-    report: [u8; 8] = [0x02, 0, 0, 0, 0, 0, 0, 0],
+    #[task(
+    shared = [debug_port, hid_device, neo],
+    local = [
+    report: [u8; 8] = [0, 0, 0, 0, 0, 0, 0, 0],
+    wheel_pos: u8 = 1
+    ]
+    )]
+    fn write_keyboard(mut cx: write_keyboard::Context, scheduled: Instant) {
+        let mut next = scheduled + 50.millis();
+        *cx.local.wheel_pos = *cx.local.wheel_pos + 10 % 255;
+        (cx.shared.hid_device, cx.shared.neo)
+            .lock(|hid, neo| {
+                // .lock(|hid: HIDClass<_>, neo: Ws2812Direct<_,_,_>| {
+                if *cx.local.wheel_pos > 128 {
+                    cx.local.report[3] = 0x04;
+                } else {
+                    cx.local.report[3] = 0x0;
+                }
+                if let Err(e) = hid.push_raw_input(cx.local.report) {
+                    *cx.local.wheel_pos = 255;
+                    next = scheduled + 1000.millis();
+                    let _ = cx
+                        .shared
+                        .debug_port
+                        .lock(|dp| write!(dp, "got error when pushing hid: {e:?}\r\n"));
+                }
+                neo.write(brightness(once(wheel(*cx.local.wheel_pos)), 32)).unwrap();
+            });
+
+        write_keyboard::spawn_at(next, next).unwrap();
+    }
+
+    #[task(
+    binds = PIO0_IRQ_0,
+    shared = [debug_port, hid_device, neo],
+    local = [
+    report: [u8; 8] = [0, 0, 0, 0, 0, 0, 0, 0],
+    wheel_pos: u8 = 1
     ])]
     fn pio0_irq_0(mut cx: pio0_irq_0::Context) {
-        cx.shared.hid_device.lock(|hid| {
-            if let Err(e) = hid.push_raw_input(cx.local.report) {
-                let _ = cx
-                    .shared
-                    .debug_port
-                    .lock(|dp| write!(dp, "got error when pushing hid: {e:?}\r\n"));
-            }
-        });
         // use byteorder::{BigEndian, ByteOrder};
         // while let Some(pio_report) = cx.local.rx.read() {
         //     BigEndian::write_u32(&mut cx.local.report[1..], !pio_report);
@@ -237,7 +373,25 @@ mod app {
     #[idle]
     fn idle(_cx: idle::Context) -> ! {
         loop {
-            cortex_m::asm::wfi();
+            // cortex_m::asm::wfi();
+            scan::spawn().unwrap();
+            check_state::spawn().unwrap();
+        }
+    }
+
+    fn wheel(mut wheel_pos: u8) -> RGB8 {
+        wheel_pos = 255 - wheel_pos;
+        if wheel_pos < 85 {
+            // No green in this sector - red and blue only
+            (255 - (wheel_pos * 3), 0, wheel_pos * 3).into()
+        } else if wheel_pos < 170 {
+            // No red in this sector - green and blue only
+            wheel_pos -= 85;
+            (0, wheel_pos * 3, 255 - (wheel_pos * 3)).into()
+        } else {
+            // No blue in this sector - red and green only
+            wheel_pos -= 170;
+            (wheel_pos * 3, 255 - (wheel_pos * 3), 0).into()
         }
     }
 }
