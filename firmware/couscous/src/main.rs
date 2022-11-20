@@ -7,7 +7,6 @@ use panic_halt as _;
 #[rtic::app(device = seeeduino_xiao_rp2040::pac, dispatchers = [SPI0_IRQ])]
 mod app {
     use core::fmt::{self, Write};
-    use core::future::Future;
     use core::hash::Hasher;
     use core::iter::once;
 
@@ -25,12 +24,12 @@ mod app {
     use hash32::{BuildHasherDefault, FnvHasher};
     use heapless::{FnvIndexSet, IndexSet};
     use rp2040_monotonic::{ExtU64, Rp2040Monotonic};
-    use rtic::mutex_prelude::{TupleExt02, TupleExt03};
     use seeeduino_xiao_rp2040 as bsp;
     use smart_leds::{brightness, RGB8, SmartLedsWrite};
     // USB Device support
     use usb_device::{class_prelude::*, prelude::*};
-    use usbd_hid::hid_class::{HIDClass, HidClassSettings, HidProtocol, HidSubClass};
+    use usbd_hid::descriptor::KeyboardReport;
+    use usbd_hid::hid_class::{HIDClass, HidClassSettings, HidCountryCode, HidProtocol, HidSubClass, ProtocolModeConfig};
     use usbd_serial::SerialPort;
     use ws2812_pio::Ws2812Direct;
 
@@ -94,6 +93,7 @@ mod app {
         debug_port: DebugPort<'static>,
         hid_device: HIDClass<'static, hal::usb::UsbBus>,
         neo: Ws2812Direct<PIO0, SM0, bsp::hal::gpio::bank0::Gpio12>,
+        neo_power: DynPin,
     }
 
     #[local]
@@ -155,7 +155,7 @@ mod app {
         // we want to run the statemachine at 30MHz
         // since that's the max clock speed of the SRT400
         // shift registers
-        let divisor = f64::from(clocks.reference_clock.freq().raw()) / 30.0;
+        // let divisor = f64::from(clocks.reference_clock.freq().raw()) / 30.0;
 
 
         // Set up the USB driver
@@ -181,6 +181,8 @@ mod app {
         let mut hid_settings = HidClassSettings::default();
         hid_settings.protocol = HidProtocol::Keyboard;
         hid_settings.subclass = HidSubClass::Boot;
+        hid_settings.config = ProtocolModeConfig::ForceBoot;
+        hid_settings.locale = HidCountryCode::Swedish;
         let hid_device = HIDClass::new_with_settings(
             usb_bus,
             DESCRIPTOR,
@@ -213,6 +215,7 @@ mod app {
                 debug_port,
                 hid_device,
                 neo: ws,
+                neo_power: neopower.into(),
             },
             Local {
                 rows: [pins.a0.into(), pins.a1.into(), pins.a2.into(), pins.a3.into(), pins.sda.into()],
@@ -244,7 +247,7 @@ mod app {
         });
     }
 
-    #[task(local = [wheel_pos: u8 = 1], shared = [current_state, last_state])]
+    #[task(local = [wheel_pos: u8 = 1, red, blue], shared = [current_state, last_state])]
     fn check_state(cx: check_state::Context) {
         let current_state = cx.shared.current_state;
         let last_state = cx.shared.last_state;
@@ -252,10 +255,16 @@ mod app {
         (current_state, last_state).lock(|current_state, last_state| {
             if *(&last_state.eq(&current_state)) {
                 // Nothing has changed
+                // cx.local.red.set_low().unwrap();
+                // cx.local.green.set_low().unwrap();
+                // cx.local.blue.set_low().unwrap();
             } else {
                 // send_new_report();
                 // cx.local.neo.write(brightness(once(wheel(*cx.local.wheel_pos)), 32)).unwrap();
                 *cx.local.wheel_pos = *cx.local.wheel_pos + 10 % 255;
+                // cx.local.red.set_high().unwrap();
+                // cx.local.green.set_high().unwrap();
+                // cx.local.blue.set_high().unwrap();
                 last_state.clear();
                 for pos in current_state.iter() {
                     last_state.insert(*pos).unwrap();
@@ -314,31 +323,58 @@ mod app {
     }
 
     #[task(
-    shared = [debug_port, hid_device, neo],
+    shared = [debug_port, hid_device, neo, neo_power, last_state],
     local = [
     report: [u8; 8] = [0, 0, 0, 0, 0, 0, 0, 0],
-    wheel_pos: u8 = 1
+    wheel_pos: u8 = 1,
+    green
     ]
     )]
     fn write_keyboard(mut cx: write_keyboard::Context, scheduled: Instant) {
+        cx.local.green.set_low().unwrap();
         let mut next = scheduled + 50.millis();
-        *cx.local.wheel_pos = *cx.local.wheel_pos + 10 % 255;
-        (cx.shared.hid_device, cx.shared.neo)
-            .lock(|hid, neo| {
-                // .lock(|hid: HIDClass<_>, neo: Ws2812Direct<_,_,_>| {
-                if *cx.local.wheel_pos > 128 {
-                    cx.local.report[3] = 0x04;
-                } else {
-                    cx.local.report[3] = 0x0;
+        (cx.shared.hid_device, cx.shared.neo, cx.shared.neo_power, cx.shared.last_state)
+            .lock(|hid, neo, neo_power, last_state| {
+                // .lock(|hid: HIDClass<_>, neo: Ws2812Direct<_, _, _>, last_state: FnvIndexSet<_, 64>| {
+                let mut report = KeyboardReport {
+                    modifier: 0,
+                    reserved: 0,
+                    leds: 0,
+                    keycodes: [0, 0, 0, 0, 0, 0],
+                };
+                if last_state.is_empty() {} else {
+                    report.keycodes = [0x04, 0, 0, 0, 0, 0];
                 }
-                if let Err(e) = hid.push_raw_input(cx.local.report) {
-                    *cx.local.wheel_pos = 255;
-                    next = scheduled + 1000.millis();
-                    let _ = cx
-                        .shared
-                        .debug_port
-                        .lock(|dp| write!(dp, "got error when pushing hid: {e:?}\r\n"));
+                let slice = 100 / 8;
+                *cx.local.wheel_pos = *cx.local.wheel_pos + 1 % 255;
+                match hid.push_input(&report) {
+                    Ok(_) => *cx.local.wheel_pos = 200,
+                    Err(UsbError::InvalidState) => {
+                        *cx.local.wheel_pos = slice * 1;
+                    }
+                    Err(UsbError::WouldBlock) => {
+                        *cx.local.wheel_pos = slice * 2;
+                    }
+                    Err(UsbError::ParseError) => {
+                        *cx.local.wheel_pos = slice * 3;
+                    }
+                    Err(UsbError::BufferOverflow) => {
+                        *cx.local.wheel_pos = slice * 4;
+                    }
+                    Err(UsbError::EndpointOverflow) => *cx.local.wheel_pos = slice * 5,
+                    Err(UsbError::EndpointMemoryOverflow) => *cx.local.wheel_pos = slice * 6,
+                    Err(UsbError::InvalidEndpoint) => *cx.local.wheel_pos = slice * 7,
+                    Err(UsbError::Unsupported) => *cx.local.wheel_pos = slice * 8,
                 }
+                // next = scheduled + 1000.millis();
+                // if let Err(e) = hid.push_input(report) {
+                //     *cx.local.wheel_pos = 255;
+                //     next = scheduled + 1000.millis();
+                //     let _ = cx
+                //         .shared
+                //         .debug_port
+                //         .lock(|dp| write!(dp, "got error when pushing hid: {e:?}\r\n"));
+                // }
                 neo.write(brightness(once(wheel(*cx.local.wheel_pos)), 32)).unwrap();
             });
 
