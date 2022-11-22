@@ -182,7 +182,7 @@ mod app {
                 neo_power: neopower.into(),
             },
             Local {
-                rows: [pins.a0.into(), pins.a1.into(), pins.a2.into(), pins.a3.into(), pins.sda.into()],
+                rows: [pins.sda.into(), pins.a3.into(), pins.a2.into(), pins.a1.into(), pins.a0.into()],
                 cols: [pins.scl.into(), pins.tx.into(), pins.rx.into(), pins.sck.into(), pins.miso.into(), pins.mosi.into()],
                 current_state: FnvIndexSet::new(),
                 last_state: FnvIndexSet::new(),
