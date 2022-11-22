@@ -270,7 +270,10 @@ mod app {
                     );
                     pressed.insert(position).unwrap();
                 }
+                col.into_pull_down_disabled();
+                delay(20);
             }
+            delay(20);
             row.set_low().unwrap();
             row.into_pull_down_input();
             for (c, col) in cols.iter_mut().enumerate() {
@@ -286,6 +289,7 @@ mod app {
                 }
                 col.set_low().unwrap();
             }
+            delay(20);
         }
         pressed
     }

@@ -16,11 +16,11 @@ pub fn meta_value(key: u8) -> u8 {
 }
 
 const LAYOUT: [[(u8, u8); 6]; 5] = [
-    [(key::ESC, key::K1), (key::K2, key::K3), (key::K4, key::K5), (key::K6, key::K7), (key::K8, key::K9), (key::K0, key::OBRAKET)],
-    [(key::NONE, key::NONE), (key::NONE, key::NONE), (key::NONE, key::NONE), (key::NONE, key::NONE), (key::NONE, key::NONE), (key::NONE, key::NONE), ],
-    [(key::ESC, key::A), (key::S, key::D), (key::NONE, key::NONE), (key::NONE, key::NONE), (key::NONE, key::NONE), (key::NONE, key::NONE), ],
-    [(key::L_SHFT, key::Z), (key::X, key::C), (key::NONE, key::NONE), (key::NONE, key::NONE), (key::NONE, key::NONE), (key::NONE, key::NONE), ],
-    [(key::NONE, key::NONE), (key::NONE, key::NONE), (key::NONE, key::NONE), (key::NONE, key::NONE), (key::NONE, key::NONE), (key::NONE, key::NONE), ],
+    [(key::ESC, key::K1), (key::K2, key::K3), (key::K4, key::K5), (key::K6, key::K7), (key::K8, key::K9), (key::K0, key::DASH)],
+    [(key::TAB, key::Q), (key::W, key::E), (key::R, key::T), (key::Y, key::U), (key::I, key::O), (key::P, key::OBRAKET), ],
+    [(key::ESC, key::A), (key::S, key::D), (key::F, key::G), (key::H, key::J), (key::K, key::L), (key::COLON, key::QUOTE), ],
+    [(key::L_SHFT, key::Z), (key::X, key::C), (key::V, key::B), (key::N, key::M), (key::COMMA, key::DOT), (key::SLASH, key::R_SHFT), ],
+    [(key::L_CTRL, key::L_SUPR), (key::BS_N_PIPE, key::L_ALT), (key::NONE, key::SPACE), (key::RETURN, key::NONE), (key::R_ALT, key::MENU), (key::R_SUPR, key::R_CTRL), ],
 ];
 
 pub fn map_pos_to_key(position: &Position) -> u8 {
