@@ -205,23 +205,11 @@ mod app {
         if *cx.local.cnt == 0 {
             *cx.local.wheel_pos = *cx.local.wheel_pos + 1 % 255;
         }
-        // let _ = cx
-        //     .shared
-        //     .debug_port
-        //     .lock(|dp| write!(dp, "Hello from runner\r\n"));
         let rows = cx.local.rows;
         let cols = cx.local.cols;
         let last_state = cx.local.last_state;
         let state: IndexSet<Position, BuildHasherDefault<FnvHasher>, 64> = scan(rows, cols);
-        // let _ = cx
-        //     .shared
-        //     .debug_port
-        //     .lock(|dp| write!(dp, "Current state {state:?}\r\n"));
         if !(state.eq(last_state)) {
-            // let _ = cx
-            //     .shared
-            //     .debug_port
-            //     .lock(|dp| write!(dp, "Pressed: {last_state:?}\r\n"));
             (cx.shared.hid_device, cx.shared.debug_port)
                 .lock(|hid, debug| {
                     write!(debug, "State was changed: {state:?}\r\n").unwrap();
@@ -232,10 +220,6 @@ mod app {
                 last_state.insert(*pos).unwrap();
             }
         } else {
-            // let _ = cx
-            //     .shared
-            //     .debug_port
-            //     .lock(|dp| write!(dp, "Nothing changed\r\n"));
         }
         let next = scheduled + 1.millis();
         runner::spawn_at(next, next).unwrap();
