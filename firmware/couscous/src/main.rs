@@ -333,62 +333,28 @@ mod app {
             leds: 0,
             keycodes: [0, 0, 0, 0, 0, 0],
         };
+
+        let mut chars: u8 = 0;
         for pos in state {
             let key = map_pos_to_key(pos);
             let meta_value = meta_value(key);
             report.modifier = report.modifier | meta_value;
             if meta_value == 0 {
-                report.keycodes[0] = map_pos_to_key(pos);
+                report.keycodes[chars as usize] = map_pos_to_key(pos);
+                chars = chars + 1;
+            }
+            if chars >= 6 {
+                if let Err(e) = hid.push_input(&report) {
+                    let _ = write!(debug, "got error when pushing hid: {e:?}\r\n");
+                }
+                report.keycodes = [0, 0, 0, 0, 0, 0];
+                chars = 0;
             }
         }
 
         if let Err(e) = hid.push_input(&report) {
-            // *cx.local.wheel_pos = 255;
             let _ = write!(debug, "got error when pushing hid: {e:?}\r\n");
-            // let _ = cx
-            //     .shared
-            //     .debug_port
-            //     .lock(|dp| write!(dp, "got error when pushing hid: {e:?}\r\n"));
         }
-
-        // // let _ = cx
-        // //     .shared
-        // //     .debug_port
-        // //     .lock(|dp| write!(dp, "in write_keyboard\r\n"));
-        // (cx.shared.hid_device, cx.shared.last_state)
-        //     .lock(|hid, last_state| {
-        //         // .lock(|hid: HIDClass<_>, neo: Ws2812Direct<_, _, _>, last_state: FnvIndexSet<_, 64>| {
-        //         let _ = cx
-        //             .shared
-        //             .debug_port
-        //             .lock(|dp| write!(dp, "Pressed: {last_state:?}\r\n"));
-        //         // let mut report = KeyboardReport {
-        //         //     modifier: 0,
-        //         //     reserved: 0,
-        //         //     leds: 0,
-        //         //     keycodes: [0, 0, 0, 0, 0, 0],
-        //         // };
-        //         // if last_state.is_empty() {
-        //         //     if let Err(e) = hid.push_input(&report) {
-        //         //         // *cx.local.wheel_pos = 255;
-        //         //         let _ = cx
-        //         //             .shared
-        //         //             .debug_port
-        //         //             .lock(|dp| write!(dp, "got error when pushing hid: {e:?}\r\n"));
-        //         //     }
-        //         // } else {
-        //         //     report.keycodes[0] = 0x0A;
-        //         //     if let Err(e) = hid.push_input(&report) {
-        //         //         // *cx.local.wheel_pos = 255;
-        //         //         let _ = cx
-        //         //             .shared
-        //         //             .debug_port
-        //         //             .lock(|dp| write!(dp, "got error when pushing hid: {e:?}\r\n"));
-        //         //     }
-        //         // }
-        //
-        //         // neo.write(brightness(once(wheel(*cx.local.wheel_pos)), 32)).unwrap();
-        //     });
     }
 
 
