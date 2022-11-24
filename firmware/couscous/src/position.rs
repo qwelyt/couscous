@@ -1,15 +1,5 @@
 pub mod position {
-    #[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Copy, Clone)]
-    pub enum Direction {
-        Row2Col,
-        Col2Row,
-    }
-
-    impl Direction {
-        fn name(self) -> &'static str {
-            stringify!(self)
-        }
-    }
+    pub use crate::direction::direction::Direction;
 
     #[derive(Eq, PartialEq, Copy, Clone, Debug)]
     pub struct Position {

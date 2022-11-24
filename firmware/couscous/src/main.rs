@@ -7,6 +7,7 @@ use panic_halt as _;
 mod key_mapping;
 mod position;
 mod layer_position;
+mod direction;
 
 #[rtic::app(device = seeeduino_xiao_rp2040::pac, peripherals = true, dispatchers = [SPI0_IRQ, TIMER_IRQ_1])]
 mod app {
@@ -37,8 +38,9 @@ mod app {
     use usbd_serial::SerialPort;
     use ws2812_pio::Ws2812Direct;
 
+    use crate::direction::direction::Direction::{Col2Row, Row2Col};
     use crate::key_mapping::{layer, map_pos_to_key, meta_value};
-    use crate::position::position::{Direction::{Col2Row, Row2Col}, Position};
+    use crate::position::position::Position;
 
     #[monotonic(binds = TIMER_IRQ_0, default = true)]
     type AppMonotonic = Rp2040Monotonic;
