@@ -1,3 +1,7 @@
+#[allow(dead_code)]
+use heapless::FnvIndexSet;
+
+use crate::layer_position::layer_position::LayerPosition;
 use crate::position::position::Direction::{Col2Row, Row2Col};
 use crate::position::position::Position;
 
@@ -15,16 +19,39 @@ pub fn meta_value(key: u8) -> u8 {
     }
 }
 
-const LAYOUT: [[(u8, u8); 6]; 5] = [
-    [(key::ESC, key::K1), (key::K2, key::K3), (key::K4, key::K5), (key::K6, key::K7), (key::K8, key::K9), (key::K0, key::DASH)],
-    [(key::TAB, key::Q), (key::W, key::E), (key::R, key::T), (key::Y, key::U), (key::I, key::O), (key::P, key::OBRAKET), ],
-    [(key::ESC, key::A), (key::S, key::D), (key::F, key::G), (key::H, key::J), (key::K, key::L), (key::COLON, key::QUOTE), ],
-    [(key::L_SHFT, key::Z), (key::X, key::C), (key::V, key::B), (key::N, key::M), (key::COMMA, key::DOT), (key::SLASH, key::R_SHFT), ],
-    [(key::L_CTRL, key::L_SUPR), (key::BS_N_PIPE, key::L_ALT), (key::NONE, key::SPACE), (key::RETURN, key::BACKSPACE), (key::R_ALT, key::MENU), (key::R_SUPR, key::R_CTRL), ],
+const LAYERS: [LayerPosition; 1] = [LayerPosition::new(Position::new(4, 2, Col2Row), 1)];
+const LAYOUT: [[[(u8, u8); 6]; 5]; 2] = [
+    [
+        [(key::K1, key::K2), (key::K3, key::K4), (key::K5, key::K6), (key::K7, key::K8), (key::K9, key::K0), (key::DASH, key::EQUAL)],
+        [(key::TAB, key::Q), (key::W, key::E), (key::R, key::T), (key::Y, key::U), (key::I, key::O), (key::P, key::OBRAKET), ],
+        [(key::ESC, key::A), (key::S, key::D), (key::F, key::G), (key::H, key::J), (key::K, key::L), (key::COLON, key::QUOTE), ],
+        [(key::L_SHFT, key::Z), (key::X, key::C), (key::V, key::B), (key::N, key::M), (key::COMMA, key::DOT), (key::SLASH, key::R_SHFT), ],
+        [(key::L_CTRL, key::L_SUPR), (key::BS_N_PIPE, key::L_ALT), (key::RAISE, key::SPACE), (key::RETURN, key::BACKSPACE), (key::R_ALT, key::MENU), (key::R_SUPR, key::R_CTRL), ],
+    ],
+    [
+        [(key::F1, key::F2), (key::F3, key::F4), (key::F5, key::F6), (key::F7, key::F8), (key::F9, key::F10), (key::F11, key::F12)],
+        [(key::TAB, key::Q), (key::W, key::E), (key::R, key::T), (key::HOME, key::PGUP), (key::PGDWN, key::END), (key::PRNT_SCRN, key::CBRAKET), ],
+        [(key::ESC, key::A), (key::S, key::D), (key::F, key::INSERT), (key::ARROW_L, key::ARROW_D), (key::ARROW_U, key::ARROW_R), (key::TILDE, key::GACC), ],
+        [(key::L_SHFT, key::Z), (key::X, key::C), (key::V, key::B), (key::N, key::M), (key::COMMA, key::DOT), (key::SLASH, key::R_SHFT), ],
+        [(key::L_CTRL, key::L_SUPR), (key::BS_N_PIPE, key::L_ALT), (key::RAISE, key::SPACE), (key::RETURN, key::DELETE), (key::R_ALT, key::MENU), (key::R_SUPR, key::R_CTRL), ],
+    ],
 ];
 
-pub fn map_pos_to_key(position: &Position) -> u8 {
-    LAYOUT.get(position.row() as usize)
+pub fn layer(state: &FnvIndexSet<Position, 64>) -> u8 {
+    let mut layer = 0;
+
+    for l in LAYERS {
+        if state.contains(&l.position()) {
+            layer += l.layer();
+        }
+    }
+
+    layer
+}
+
+pub fn map_pos_to_key(layer: u8, position: &Position) -> u8 {
+    LAYOUT.get(layer as usize)
+        .and_then(|layer| layer.get(position.row() as usize))
         .and_then(|row| row.get(position.col() as usize))
         .and_then(|pos| match position.direction() {
             Row2Col => { Some(pos.1) }
@@ -151,6 +178,9 @@ mod key {
     pub const R_SHFT: u8 = 0xE5;
     pub const R_ALT: u8 = 0xE6;
     pub const R_SUPR: u8 = 0xE7;
+
+    pub const LOWER: u8 = 0x00;
+    pub const RAISE: u8 = 0x00;
 }
 
 mod mo {

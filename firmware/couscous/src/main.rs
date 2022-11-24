@@ -6,6 +6,7 @@ use panic_halt as _;
 
 mod key_mapping;
 mod position;
+mod layer_position;
 
 #[rtic::app(device = seeeduino_xiao_rp2040::pac, peripherals = true, dispatchers = [SPI0_IRQ, TIMER_IRQ_1])]
 mod app {
@@ -36,7 +37,7 @@ mod app {
     use usbd_serial::SerialPort;
     use ws2812_pio::Ws2812Direct;
 
-    use crate::key_mapping::{map_pos_to_key, meta_value};
+    use crate::key_mapping::{layer, map_pos_to_key, meta_value};
     use crate::position::position::{Direction::{Col2Row, Row2Col}, Position};
 
     #[monotonic(binds = TIMER_IRQ_0, default = true)]
@@ -219,8 +220,7 @@ mod app {
             for pos in state.iter() {
                 last_state.insert(*pos).unwrap();
             }
-        } else {
-        }
+        } else {}
         let next = scheduled + 1.millis();
         runner::spawn_at(next, next).unwrap();
     }
@@ -319,12 +319,13 @@ mod app {
         };
 
         let mut chars: u8 = 0;
+        let layer = layer(state);
         for pos in state {
-            let key = map_pos_to_key(pos);
+            let key = map_pos_to_key(layer, pos);
             let meta_value = meta_value(key);
             report.modifier = report.modifier | meta_value;
-            if meta_value == 0 {
-                report.keycodes[chars as usize] = map_pos_to_key(pos);
+            if meta_value == 0 && key != 0 {
+                report.keycodes[chars as usize] = key;
                 chars = chars + 1;
             }
             if chars >= 6 {

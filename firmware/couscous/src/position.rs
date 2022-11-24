@@ -1,6 +1,4 @@
 pub mod position {
-    use crate::position::position::Direction::{Col2Row, Row2Col};
-
     #[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Copy, Clone)]
     pub enum Direction {
         Row2Col,
@@ -21,7 +19,7 @@ pub mod position {
     }
 
     impl Position {
-        pub fn new(row: u8, col: u8, direction: Direction) -> Self {
+        pub const fn new(row: u8, col: u8, direction: Direction) -> Self {
             Self {
                 row,
                 col,
